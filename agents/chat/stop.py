@@ -28,7 +28,7 @@ async def handler(context):
       - Runner result.cancel() is called to actually terminate the LLM request.
     """
     body = context.request.body or {}
-    conversation_id = body.get('conversation_id')
+    conversation_id = body.get('conversation_id') or body.get('conversationId')
     logger.log(f"conversation_id: {conversation_id}")
 
     if not conversation_id:

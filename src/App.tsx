@@ -1,608 +1,264 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import type {
-  Message,
-  ToolLampState,
-  ConversationSummary,
-} from './types';
-import {
-  fetchConversationHistory,
-  sendMessageStream,
-  stopAgent,
-  listConversations,
-  deleteConversation,
-} from './api';
-import type { RawSseEvent } from './api';
-import ToolIndicators from './components/ToolIndicators';
-import ChatWindow from './components/ChatWindow';
-import ChatInput from './components/ChatInput';
-import DebugPanel from './components/DebugPanel';
-import CodeViewer from './components/CodeViewer';
-import ConversationSidebar from './components/ConversationSidebar';
-import GitHubLink from './components/GitHubLink';
-import DeployLink from './components/DeployLink';
-import { I18nProvider, LangToggle, useT, MessageKeys } from './i18n';
-import { deleteSnapshot, loadSnapshot, saveSnapshot } from './lib/chatUiStore';
+import { Children, useEffect, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
+import ReactMarkdown from 'react-markdown';
+import { sendMessageStream, stopAgent } from './api';
+import type { GuideMessage, GuideSession, Language, StreamError, WorkSource } from './types';
 import styles from './App.module.css';
 
-const LAMP_IDS = ['get_weather', 'get_clothing_advice', 'translate_text', 'text_statistics'] as const;
-const LAMP_ICONS: Record<string, string> = {
-  get_weather: '☀️',
-  get_clothing_advice: '👔',
-  translate_text: '🌐',
-  text_statistics: '📊',
+const MAX_INPUT = 1600;
+const STORAGE_KEY = 'works-guide-session-v1';
+const params = new URLSearchParams(window.location.search);
+const site = params.get('site') === 'p4' ? 'p4' : 'hefa';
+const embedded = params.get('embed') === '1';
+const mode = params.get('mode') === 'extract' ? 'extract' : 'model';
+
+const copy = {
+  zh: {
+    brand: site === 'p4' ? 'P4 剧场' : '何发 HE FA', guide: '作品导览',
+    title: '从一个问题，走近作品。',
+    description: '依据官网公开资料，提供简短回答与原文出处。文字导览不代表观片体验。',
+    prompts: ['何发与人类投降派是什么关系？', '第一次看 P4，从哪里开始？', '《茧房》和《天台上的嚎叫者》有什么不同？', '有哪些公开的装置作品？'],
+    suggestions: '可以从这里开始', user: '你', assistant: '导览', sources: '原文出处', read: '阅读原文',
+    question: '写下你的问题', placeholder: '问一部作品，也可以接着追问…',
+    send: '提问', stop: '停止', stopping: '正在停止…', reset: '重新开始', retry: '重试',
+    working: '正在查阅公开资料…', ready: '回答已完成。', excerpt: '原文摘录',
+    stopped: '已停止。当前文字可能不完整。', stopUnconfirmed: '已停止显示，服务器取消尚未确认。',
+    followup: '接着问', privacy: '仅在本次浏览会话中保留最近 6 条对话。', keyboard: 'Enter 发送 · Shift + Enter 换行',
+    unavailable: '暂时无法完成回答，请稍后重试。你也可以阅读下方原文。', interrupted: '连接中断，回答可能不完整。请重试。',
+    sourcePublic: '公开资料', sourceFilm: '影像', sourceInstallation: '装置',
+  },
+  en: {
+    brand: site === 'p4' ? 'P4 THEATER' : 'HE FA', guide: 'Works guide', title: 'Begin with a question.',
+    description: 'Brief answers drawn from public website materials, with links to the original sources. A text guide cannot replace watching the work.',
+    prompts: ['How are He Fa and P4 Theater connected?', 'Where should I start with P4?', 'How do Cocoon and The Rooftop Howler differ?', 'Which installation works are publicly documented?'],
+    suggestions: 'A few places to begin', user: 'You', assistant: 'Guide', sources: 'Original sources', read: 'Read the source',
+    question: 'Your question', placeholder: 'Ask about a work, or follow up…',
+    send: 'Ask', stop: 'Stop', stopping: 'Stopping…', reset: 'Start again', retry: 'Retry',
+    working: 'Reading public materials…', ready: 'The answer is ready.', excerpt: 'Source excerpt',
+    stopped: 'Stopped. The text may be incomplete.', stopUnconfirmed: 'Display stopped. Server cancellation is not yet confirmed.',
+    followup: 'Ask a follow-up', privacy: 'Only the latest 6 messages are kept for this browsing session.', keyboard: 'Enter to send · Shift + Enter for a new line',
+    unavailable: 'The answer is temporarily unavailable. Please retry, or read the sources below.', interrupted: 'The connection ended before the answer was complete. Please retry.',
+    sourcePublic: 'Public material', sourceFilm: 'Film', sourceInstallation: 'Installation',
+  },
 };
-const LAMP_I18N_KEYS: Record<string, string> = {
-  get_weather: 'tool.weather',
-  get_clothing_advice: 'tool.clothing',
-  translate_text: 'tool.translate',
-  text_statistics: 'tool.statistics',
-};
 
-const CONVERSATION_ID_STORAGE_KEY = 'eo_conversation_id';
-
-/**
- * eo-uuid: stable per-browser identifier. Generated client-side on first
- * visit and persisted in localStorage. Used as the `userId` argument to all
- * memory-store calls so that listConversations / clear / delete can scope
- * results to "this browser's conversations only". Cross-template aware:
- * intentionally shares the same localStorage key with claude-agent-starter
- * so the same browser sees the same identity in either template.
- */
-const EO_USER_ID_STORAGE_KEY = 'eo-uuid';
-const CONVERSATIONS_PAGE_SIZE = 20;
-
-/** Returns existing conversation ID from localStorage, or null if first visit */
-function getExistingConversationId(): string | null {
-  return localStorage.getItem(CONVERSATION_ID_STORAGE_KEY);
+function newSession(): GuideSession {
+  return { conversationId: crypto.randomUUID(), userId: crypto.randomUUID(), site, messages: [] };
 }
 
-/** Returns existing or creates a new conversation ID */
-function getOrCreateConversationId(): string {
-  const cached = getExistingConversationId();
-  if (cached) return cached;
-
-  const conversationId = crypto.randomUUID();
-  localStorage.setItem(CONVERSATION_ID_STORAGE_KEY, conversationId);
-  return conversationId;
+function readSession(): GuideSession {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null') as GuideSession | null;
+    if (!saved || saved.site !== site || typeof saved.conversationId !== 'string' || typeof saved.userId !== 'string' || !Array.isArray(saved.messages)) return newSession();
+    const messages = saved.messages.filter(message => message && typeof message.id === 'string' && (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string').slice(-6).map(message => ({
+      ...message, sources: Array.isArray(message.sources) ? message.sources : [], status: message.status === 'streaming' ? 'stopped' as const : message.status,
+    }));
+    return { ...saved, messages };
+  } catch { return newSession(); }
 }
 
-function getOrCreateEoUuid(): string {
-  const cached = localStorage.getItem(EO_USER_ID_STORAGE_KEY);
-  if (cached) return cached;
-  const eoUuid = crypto.randomUUID();
-  localStorage.setItem(EO_USER_ID_STORAGE_KEY, eoUuid);
-  return eoUuid;
+function readableSourceUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'https:' && ['hefa.p4theater.cn', 'p4theater.cn'].includes(parsed.hostname) && !parsed.username && !parsed.password) return parsed.href;
+  } catch { /* Invalid source URLs remain plain text. */ }
+  return undefined;
 }
 
-// Module-level dedup flag — outside React lifecycle, unaffected by StrictMode
-let _historyFetchInFlight = false;
+function sourceLabel(source: WorkSource, language: Language): string {
+  const t = copy[language];
+  if (['film', 'video', '电影', '影像'].includes(source.kind.toLowerCase())) return t.sourceFilm;
+  if (['installation', '装置'].includes(source.kind.toLowerCase())) return t.sourceInstallation;
+  return t.sourcePublic;
+}
+
+function citeSources(children: ReactNode, sources: WorkSource[], language: Language): ReactNode {
+  return Children.map(children, child => {
+    if (typeof child !== 'string') return child;
+    return child.split(/(\[E\d+\])/g).map((part, index) => {
+      if (!/^\[E\d+\]$/.test(part)) return part;
+      const source = sources.find(item => item.id === part.slice(1, -1));
+      const url = source && readableSourceUrl(source.url);
+      return url ? <a key={index} className={styles.citation} href={url} target="_blank" rel="noopener noreferrer" aria-label={`${part} · ${copy[language].read} · ${source.title}`}>{part}</a> : part;
+    });
+  });
+}
+
+function Sources({ sources, language }: { sources: WorkSource[]; language: Language }) {
+  const t = copy[language];
+  if (!sources.length) return null;
+  return <div className={styles.sources}>
+    <p className={styles.sourcesLabel}>{t.sources}<span>{sources.length}</span></p>
+    <div className={styles.sourceList}>{sources.map((source, index) => {
+      const url = readableSourceUrl(source.url);
+      const title = <><span className={styles.sourceNumber}>{source.id}</span><span>{source.title}</span>{url && <span aria-hidden="true" className={styles.externalArrow}>↗</span>}</>;
+      return <article className={styles.source} key={`${source.id}-${index}`}>
+        <p className={styles.sourceTitle}>{url ? <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`${source.title} · ${t.read}`}>{title}</a> : <span className={styles.sourceTitleText}>{title}</span>}</p>
+        <p className={styles.sourceMeta}>{sourceLabel(source, language)}<span aria-hidden="true"> / </span>{url ? new URL(url).hostname : source.site}</p>
+        {source.excerpt && <p className={styles.sourceExcerpt}>{source.excerpt}</p>}
+      </article>;
+    })}</div>
+  </div>;
+}
 
 export default function App() {
-  return (
-    <I18nProvider>
-      <LangToggle />
-      <AppInner />
-    </I18nProvider>
-  );
-}
+  const [language, setLanguage] = useState<Language>(params.get('lang') === 'en' ? 'en' : 'zh');
+  const [session, setSession] = useState<GuideSession>(readSession);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const sessionRef = useRef(session);
+  const controllerRef = useRef<AbortController | null>(null);
+  const responseIdRef = useRef('');
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+  const t = copy[language];
 
-function AppInner() {
-  const { t } = useT();
-  const buildLamps = useCallback((): ToolLampState[] =>
-    LAMP_IDS.map(id => ({
-      id,
-      label: t(LAMP_I18N_KEYS[id] as MessageKeys),
-      icon: LAMP_ICONS[id],
-      active: false,
-      animKey: 0,
-    })),
-  [t]);
+  function updateSession(updater: (previous: GuideSession) => GuideSession) {
+    const next = updater(sessionRef.current);
+    sessionRef.current = next;
+    setSession(next);
+  }
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [lamps, setLamps]       = useState<ToolLampState[]>(buildLamps);
-  const [loading, setLoading]   = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [debugEvents, setDebugEvents] = useState<RawSseEvent[]>([]);
-  const [rightPanelMode, setRightPanelMode] = useState<'code' | 'debug'>('code');
-
-  // Conversation list (sidebar) state
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [conversationsLoading, setConversationsLoading] = useState(true);
-  const [conversationsLoadingMore, setConversationsLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
-  const [activeConversationId, setActiveConversationId] = useState<string>(() => getOrCreateConversationId());
-
-  const botMsgIdRef = useRef<string>('');
-  const abortCtrlRef = useRef<AbortController | null>(null);
-  const hadExistingConversationIdRef = useRef(getExistingConversationId() !== null);
-  const conversationIdRef = useRef<string>(activeConversationId);
-  const eoUuidRef = useRef<string>(getOrCreateEoUuid());
-  const initDoneRef = useRef(false);
-  const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Keep conversationIdRef in sync with the activeConversationId state.
   useEffect(() => {
-    conversationIdRef.current = activeConversationId;
-  }, [activeConversationId]);
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...session, messages: session.messages.slice(-6) })); } catch { /* Storage is optional. */ }
+  }, [session]);
 
-  // Update lamp labels when language changes
   useEffect(() => {
-    setLamps(prev =>
-      prev.map(l => ({
-        ...l,
-        label: t(LAMP_I18N_KEYS[l.id] as MessageKeys),
-      }))
-    );
-  }, [t]);
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+    document.title = `${t.brand} · ${t.guide}`;
+    const query = new URLSearchParams(window.location.search);
+    query.set('lang', language);
+    window.history.replaceState(null, '', `${window.location.pathname}?${query.toString()}${window.location.hash}`);
+  }, [language, t.brand, t.guide]);
 
-  // Persist a UI snapshot of the current conversation's messages to IndexedDB
-  // (debounced) so a refresh restores instantly without hitting /history.
   useEffect(() => {
-    if (messages.length === 0) return;
-    if (!initDoneRef.current) return;
+    const element = messagesRef.current;
+    if (element && autoScrollRef.current) element.scrollTop = element.scrollHeight;
+  }, [session.messages, loading]);
 
-    if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
-    snapshotTimerRef.current = setTimeout(() => {
-      saveSnapshot(conversationIdRef.current, messages).catch(err => {
-        console.warn('[chatUiStore] snapshot save failed:', err);
-      });
-    }, 500);
-
-    return () => {
-      if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+  useEffect(() => {
+    const leave = () => {
+      if (!controllerRef.current) return;
+      controllerRef.current.abort();
+      controllerRef.current = null;
+      const active = sessionRef.current;
+      void stopAgent(active.conversationId, active.userId, true);
     };
-  }, [messages]);
+    window.addEventListener('pagehide', leave);
+    return () => { window.removeEventListener('pagehide', leave); leave(); };
+  }, []);
 
-  /** Load full message list for a conversation: snapshot first, then /history reconciliation. */
-  const loadConversation = useCallback(async (convId: string) => {
-    setHistoryLoading(true);
-    let restoredFromSnapshot = false;
-    let snapshotMessageCount = 0;
-
+  useEffect(() => {
+    if (!embedded || window.parent === window) return;
+    let parentOrigin = '';
     try {
-      const snapshot = await loadSnapshot(convId).catch(() => [] as Message[]);
-      snapshotMessageCount = snapshot.length;
-      if (snapshot.length > 0) {
-        restoredFromSnapshot = true;
-        setMessages(snapshot);
-        setHistoryLoading(false);
-      }
-
-      const history = await fetchConversationHistory(convId, eoUuidRef.current);
-      if (history.length > 0) {
-        if (!restoredFromSnapshot || history.length > snapshotMessageCount) {
-          setMessages(history);
-        }
-        saveSnapshot(convId, history).catch(() => {});
-      } else if (!restoredFromSnapshot) {
-        setMessages([]);
-      }
-    } finally {
-      setHistoryLoading(false);
-      initDoneRef.current = true;
-    }
-  }, []);
-
-  /** Refresh sidebar conversations list. mode='replace' → reload from start; 'append' → add next page. */
-  const refreshConversations = useCallback(async (mode: 'replace' | 'append', cursor?: string) => {
-    if (mode === 'append') {
-      setConversationsLoadingMore(true);
-    } else {
-      setConversationsLoading(true);
-    }
-    try {
-      const res = await listConversations({
-        userId: eoUuidRef.current,
-        limit: CONVERSATIONS_PAGE_SIZE,
-        order: 'desc',
-        after: cursor,
-      });
-
-      setNextCursor(res.nextCursor);
-
-      if (mode === 'append') {
-        setConversations(prev => {
-          const seen = new Set(prev.map(c => c.id));
-          const merged = [...prev];
-          for (const c of res.conversations) {
-            if (!seen.has(c.id)) merged.push(c);
-          }
-          return merged;
-        });
-      } else {
-        setConversations(res.conversations);
-      }
-    } finally {
-      if (mode === 'append') {
-        setConversationsLoadingMore(false);
-      } else {
-        setConversationsLoading(false);
-      }
-    }
-  }, []);
-
-  // Initial load: history (only if previously visited) + conversations list
-  useEffect(() => {
-    if (_historyFetchInFlight) {
-      void refreshConversations('replace');
-      return;
-    }
-    _historyFetchInFlight = true;
-
-    if (!hadExistingConversationIdRef.current) {
-      // First visit: skip /history fetch (would be empty). Still kick off the
-      // conversations list so the sidebar shows the user's other browsers'
-      // conversations if any (rare but possible).
-      setHistoryLoading(false);
-      initDoneRef.current = true;
-      void refreshConversations('replace').finally(() => {
-        _historyFetchInFlight = false;
-      });
-      return;
-    }
-
-    void loadConversation(conversationIdRef.current).finally(() => {
-      void refreshConversations('replace').finally(() => {
-        _historyFetchInFlight = false;
-      });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** Update the current bot message's content via an updater function. */
-  const updateBotMessage = useCallback((updater: (content: string) => string) => {
-    setMessages(prev =>
-      prev.map(m =>
-        m.id === botMsgIdRef.current
-          ? { ...m, content: updater(m.content) }
-          : m
-      )
-    );
-  }, []);
-
-  /** Clear the assistant message's `streaming` flag (hides the blinking caret). */
-  const clearBotStreaming = useCallback(() => {
-    setMessages(prev => {
-      let changed = false;
-      const next = prev.map(m => {
-        if (m.id === botMsgIdRef.current && m.streaming) {
-          changed = true;
-          const { streaming, ...rest } = m;
-          return rest;
-        }
-        return m;
-      });
-      return changed ? next : prev;
-    });
-  }, []);
-
-  const finishStream = useCallback(() => {
-    setLoading(false);
-    abortCtrlRef.current = null;
-  }, []);
-
-  const handleSend = useCallback(async (text: string) => {
-    initDoneRef.current = true;
-    setRightPanelMode('debug');
-
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
+      const referrer = new URL(document.referrer);
+      const official = ['https://hefa.p4theater.cn', 'https://p4theater.cn'].includes(referrer.origin);
+      const local = ['localhost', '127.0.0.1'].includes(window.location.hostname) && ['localhost', '127.0.0.1'].includes(referrer.hostname);
+      if (official || local) parentOrigin = referrer.origin;
+    } catch { return; }
+    if (!parentOrigin) return;
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') window.parent.postMessage({ type: 'works-guide-close' }, parentOrigin);
     };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, []);
 
-    const botMsgId = crypto.randomUUID();
-    botMsgIdRef.current = botMsgId;
-    const botMsg: Message = {
-      id: botMsgId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      streaming: true,
-    };
+  function updateResponse(id: string, updater: (message: GuideMessage) => GuideMessage) {
+    updateSession(previous => ({ ...previous, messages: previous.messages.map(message => message.id === id ? updater(message) : message) }));
+  }
 
-    setMessages(prev => [...prev, userMsg, botMsg]);
-    setLoading(true);
-
-    /**
-     * Optimistic sidebar update — fires as soon as the backend emits its first
-     * SSE event (matches ChatGPT's "new chat appears the moment streaming
-     * starts" UX). For brand-new conversations we prepend a synthesized summary;
-     * for existing ones we just bump them to the top.
-     *
-     * Server reconciliation still happens in onDone() via refreshConversations,
-     * which can correct the title if the runtime later overrides it.
-     */
-    let sidebarPrimed = false;
-    const cleanedText = text.replace(/\s+/g, ' ').trim();
-    const optimisticTitle =
-      cleanedText.length === 0 ? 'New chat'
-        : cleanedText.length <= 8 ? cleanedText
-          : `${cleanedText.slice(0, 8)}...`;
-
-    const primeSidebar = () => {
-      if (sidebarPrimed) return;
-      sidebarPrimed = true;
-
-      const convId = conversationIdRef.current;
-      const now = Date.now();
-
-      setConversations(prev => {
-        const idx = prev.findIndex(c => c.id === convId);
-        if (idx === -1) {
-          const summary: ConversationSummary = {
-            id: convId,
-            title: optimisticTitle,
-            lastMessageAt: now,
-            userId: eoUuidRef.current,
-          };
-          return [summary, ...prev];
-        }
-        const next = [...prev];
-        const [moved] = next.splice(idx, 1);
-        next.unshift({ ...moved, lastMessageAt: now });
-        return next;
-      });
-    };
-
-    const ctrl = sendMessageStream(text, {
-      onTextDelta(delta) {
-        updateBotMessage(content => content + delta);
-      },
-
-      onToolCalled(toolName) {
-        setLamps(prev =>
-          prev.map(l =>
-            l.id === toolName
-              ? { ...l, active: true, animKey: l.animKey + 1 }
-              : l
-          )
-        );
-        setTimeout(() => {
-          setLamps(prev =>
-            prev.map(l => (l.id === toolName ? { ...l, active: false } : l))
-          );
-        }, 1000);
-      },
-
-      onRawEvent(event) {
-        // Every backend SSE frame flows through here, so this is the cheapest
-        // hook for "first byte from backend".
-        primeSidebar();
-
-        // Coalesce consecutive text_delta events into a single growing entry,
-        // so a multi-paragraph response doesn't flood the debug panel with
-        // hundreds of one-token rows.
-        if (event.eventType === 'text_delta') {
-          const delta = (event.data as { delta?: string } | null)?.delta ?? '';
-          setRightPanelMode('debug');
-          setDebugEvents(prev => {
-            const last = prev[prev.length - 1];
-            if (last && last.eventType === 'text_delta') {
-              const prevDelta = (last.data as { delta?: string } | null)?.delta ?? '';
-              const merged: RawSseEvent = {
-                ...last,
-                data: { delta: prevDelta + delta },
-                raw: last.raw + delta,
-                timestamp: event.timestamp,
-              };
-              return [...prev.slice(0, -1), merged];
-            }
-            return [...prev, event];
-          });
-          return;
-        }
-        setRightPanelMode('debug');
-        setDebugEvents(prev => [...prev, event]);
-      },
-
-      onDone() {
-        clearBotStreaming();
-        finishStream();
-        // Reconcile with backend so the title (and any other fields the runtime
-        // synthesized) reflect the server's authoritative state.
-        void refreshConversations('replace');
-      },
-
-      onError() {
-        clearBotStreaming();
-        updateBotMessage(content => content || t("status.error"));
-        finishStream();
-      },
-    }, conversationIdRef.current, {
-      userId: eoUuidRef.current,
-      userMsgId: userMsg.id,
-      botMsgId,
-    });
-
-    abortCtrlRef.current = ctrl;
-  }, [updateBotMessage, clearBotStreaming, finishStream, refreshConversations, t]);
-
-  const handleClearHistory = useCallback(() => {
-    const oldConvId = conversationIdRef.current;
-
-    if (abortCtrlRef.current) {
-      abortCtrlRef.current.abort();
-      abortCtrlRef.current = null;
-    }
-
-    // The trash button in ChatInput is the same affordance as the trash
-    // icon on a sidebar item: it should DELETE the conversation entirely,
-    // not just clear its messages. Using `clearConversationHistory` here
-    // would leave the old conversation in the sidebar with an empty body
-    // and a fallback "New chat" title — confusing for users who clicked
-    // trash expecting "make this thread go away".
-    //
-    // Optimistically drop from the sidebar so the user sees the row
-    // disappear immediately; the network call is fire-and-forget.
-    setConversations(prev => prev.filter(c => c.id !== oldConvId));
-
-    deleteConversation(oldConvId, eoUuidRef.current).then(ok => {
-      if (!ok) {
-        console.warn('[delete-conversation] backend request failed');
-      }
-    }).finally(() => {
-      // Reconcile with backend in case state diverged.
-      void refreshConversations('replace');
-    });
-
-    deleteSnapshot(oldConvId).catch(() => {});
-
-    const newId = crypto.randomUUID();
-    localStorage.setItem(CONVERSATION_ID_STORAGE_KEY, newId);
-    conversationIdRef.current = newId;
-    setActiveConversationId(newId);
-    setMessages([]);
-    setDebugEvents([]);
-    setRightPanelMode('code');
+  function finish(id: string) {
+    if (responseIdRef.current !== id) return;
+    controllerRef.current = null;
     setLoading(false);
-    initDoneRef.current = false;
-  }, [refreshConversations]);
+  }
 
-  const handleStop = useCallback(() => {
-    // 1. Immediately abort frontend SSE read
-    if (abortCtrlRef.current) {
-      abortCtrlRef.current.abort();
-      abortCtrlRef.current = null;
-    }
-
-    // 2. Optimistic UI: show stopped immediately without waiting for backend
-    updateBotMessage(content => content ? content + '\n\n' + t("status.stopped") : t("status.stopped"));
-    setLoading(false);
-
-    // 3. Backend abort async — notify user on failure
-    stopAgent(conversationIdRef.current).then(ok => {
-      if (!ok) {
-        updateBotMessage(content => content + '\n\n' + t("status.backendError"));
-      }
+  function sendQuestion(question: string, retry = false) {
+    const trimmed = question.trim();
+    if (!trimmed || trimmed.length > MAX_INPUT || controllerRef.current || stopping) return;
+    let previous = sessionRef.current.messages;
+    if (retry) previous = previous.slice(0, -2);
+    const history = previous.filter(message => message.content && (message.role === 'user' || message.status === 'complete')).slice(-6).map(({ role, content }) => ({ role, content }));
+    const user: GuideMessage = { id: crypto.randomUUID(), role: 'user', content: trimmed, sources: [], status: 'complete' };
+    const response: GuideMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', sources: [], status: 'streaming' };
+    responseIdRef.current = response.id;
+    autoScrollRef.current = true;
+    updateSession(current => ({ ...current, messages: [...previous, user, response].slice(-6) }));
+    setInput(''); setLoading(true);
+    const active = sessionRef.current;
+    controllerRef.current = sendMessageStream({ message: trimmed, conversationId: active.conversationId, userId: active.userId, language, site, history, mode }, {
+      onTextDelta(delta) { updateResponse(response.id, message => ({ ...message, content: message.content + delta })); },
+      onSources(sources) { updateResponse(response.id, message => ({ ...message, sources })); },
+      onAnswerMeta(answerMode) { updateResponse(response.id, message => ({ ...message, mode: answerMode })); },
+      onDone(stopped) { updateResponse(response.id, message => ({ ...message, status: stopped ? 'stopped' : 'complete' })); finish(response.id); },
+      onError(error) { updateResponse(response.id, message => ({ ...message, status: 'error', error })); finish(response.id); },
     });
-  }, [updateBotMessage, t]);
+  }
 
-  /** User clicked a conversation in the sidebar. */
-  const handleSelectConversation = useCallback((id: string) => {
-    if (loading) return;
-    if (id === conversationIdRef.current) return;
+  async function stop() {
+    const id = responseIdRef.current;
+    const active = sessionRef.current;
+    setStopping(true);
+    controllerRef.current?.abort(); controllerRef.current = null; setLoading(false);
+    updateResponse(id, message => ({ ...message, status: 'stopped' }));
+    const confirmed = await stopAgent(active.conversationId, active.userId);
+    if (!confirmed) updateResponse(id, message => ({ ...message, stopUnconfirmed: true }));
+    setStopping(false);
+  }
 
-    localStorage.setItem(CONVERSATION_ID_STORAGE_KEY, id);
-    conversationIdRef.current = id;
-    setActiveConversationId(id);
-    setRightPanelMode('code');
-    void loadConversation(id);
-  }, [loading, loadConversation]);
+  function reset() {
+    if (loading || stopping) return;
+    const fresh = newSession(); sessionRef.current = fresh; setSession(fresh); setInput(''); responseIdRef.current = '';
+  }
+  function submit(event: FormEvent) { event.preventDefault(); sendQuestion(input); }
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); sendQuestion(input); }
+  }
+  function errorText(error: StreamError | undefined) {
+    if (error?.code === 'connection_closed' || error?.code === 'network_error') return t.interrupted;
+    if (error?.code.startsWith('http_')) return t.unavailable;
+    return error?.message.trim().slice(0, 240) || t.unavailable;
+  }
+  const lastUser = [...session.messages].reverse().find(message => message.role === 'user');
+  const busy = loading || stopping;
+  const hasMessages = session.messages.length > 0;
+  const lastMessage = session.messages[session.messages.length - 1];
+  const announcement = loading ? t.working : stopping ? t.stopping : lastMessage?.status === 'stopped' ? t.stopped : lastMessage?.role === 'assistant' && lastMessage.status === 'complete' ? t.ready : '';
 
-  /** User clicked "New chat" in the sidebar. */
-  const handleCreateConversation = useCallback(() => {
-    if (loading) return;
-
-    const newId = crypto.randomUUID();
-    localStorage.setItem(CONVERSATION_ID_STORAGE_KEY, newId);
-    conversationIdRef.current = newId;
-    setActiveConversationId(newId);
-    setMessages([]);
-    setDebugEvents([]);
-    setRightPanelMode('code');
-    initDoneRef.current = false;
-    setHistoryLoading(false);
-  }, [loading]);
-
-  const handleLoadMoreConversations = useCallback(() => {
-    if (!nextCursor || conversationsLoadingMore) return;
-    void refreshConversations('append', nextCursor);
-  }, [nextCursor, conversationsLoadingMore, refreshConversations]);
-
-  /**
-   * User clicked the trash icon on a sidebar item.
-   *
-   * Optimistic delete: immediately remove the item from local UI state and
-   * fire-and-forget the backend request. We don't await or block the user —
-   * if the network call fails, we log it but don't roll back, since reloading
-   * the page will reconcile via /conversations anyway.
-   */
-  const handleDeleteConversation = useCallback((id: string) => {
-    if (loading) return;
-    if (!id) return;
-
-    const confirmed = window.confirm(t('sidebar.deleteConfirm'));
-    if (!confirmed) return;
-
-    const isActive = id === conversationIdRef.current;
-
-    setConversations(prev => prev.filter(c => c.id !== id));
-
-    if (isActive) {
-      const newId = crypto.randomUUID();
-      localStorage.setItem(CONVERSATION_ID_STORAGE_KEY, newId);
-      conversationIdRef.current = newId;
-      setActiveConversationId(newId);
-      setMessages([]);
-      setDebugEvents([]);
-      setRightPanelMode('code');
-      initDoneRef.current = false;
-      setHistoryLoading(false);
-    }
-
-    void deleteSnapshot(id).catch(() => {});
-
-    void deleteConversation(id, eoUuidRef.current).catch(e => {
-      console.warn('[delete-conversation] backend request failed:', e);
-    });
-  }, [loading, t]);
-
-  const sidebarHasMore = useMemo(() => Boolean(nextCursor), [nextCursor]);
-
-  return (
-    <div className={styles.shell}>
-      <div className={styles.blob1} />
-      <div className={styles.blob2} />
-
-      <div className={styles.stage}>
-        <ConversationSidebar
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          loading={conversationsLoading}
-          loadingMore={conversationsLoadingMore}
-          hasMore={sidebarHasMore}
-          disabled={loading}
-          onSelect={handleSelectConversation}
-          onCreate={handleCreateConversation}
-          onLoadMore={handleLoadMoreConversations}
-          onDelete={handleDeleteConversation}
-        />
-
-        <div className={styles.chatPanel}>
-          <header className={styles.header}>
-            <div className={styles.headerLeft}>
-              <span className={styles.logo}>⬡</span>
-              <div>
-                <p className={styles.title}>{t("app.title")}</p>
-                <p className={styles.subtitle}>{t("app.subtitle")}</p>
-              </div>
-            </div>
-            <ToolIndicators lamps={lamps} />
-          </header>
-
-          <div className={styles.chatWindowShell}>
-            <ChatWindow messages={messages} loading={loading} />
-            {historyLoading && messages.length === 0 && (
-              <div className={styles.historyOverlay}>
-                <div className={styles.historySpinner} />
-              </div>
-            )}
-          </div>
-          <ChatInput onSend={handleSend} onStop={handleStop} onClear={handleClearHistory} disabled={loading} />
-        </div>
-
-        <div className={styles.codePanel}>
-          {rightPanelMode === 'code' ? (
-            <CodeViewer />
-          ) : (
-            <DebugPanel events={debugEvents} onClear={() => setDebugEvents([])} />
-          )}
-        </div>
-      </div>
-      <GitHubLink />
-      <DeployLink />
-    </div>
-  );
+  return <main className={`${styles.shell} ${embedded ? styles.embedded : ''}`}><div className={styles.guide}>
+    <header className={styles.header}>
+      <div className={styles.identity}><span className={styles.wordmark}>{t.brand}</span><span className={styles.guideLabel}>{t.guide}</span></div>
+      <div className={styles.language} aria-label={language === 'zh' ? '语言' : 'Language'}><button type="button" aria-pressed={language === 'zh'} onClick={() => setLanguage('zh')}>中文</button><span aria-hidden="true">/</span><button type="button" aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button></div>
+    </header>
+    <section className={`${styles.intro} ${hasMessages ? styles.introCompact : ''}`} aria-labelledby="guide-title"><h1 id="guide-title">{t.title}</h1><p>{t.description}</p></section>
+    {!hasMessages && <section className={styles.suggestions} aria-labelledby="suggestions-title"><h2 id="suggestions-title">{t.suggestions}</h2><div className={styles.promptList}>{t.prompts.map((prompt, index) => <button key={index} type="button" onClick={() => sendQuestion(prompt)} disabled={busy}><span>{prompt}</span><span className={styles.promptArrow} aria-hidden="true">↗</span></button>)}</div></section>}
+    {hasMessages && <div className={styles.conversationHeader}><p>{t.followup}</p><button className={styles.textButton} onClick={reset} disabled={busy} type="button">{t.reset}<span aria-hidden="true"> ↺</span></button></div>}
+    {hasMessages && <section aria-label={language === 'zh' ? '导览对话' : 'Guide conversation'}><div className={styles.messages} ref={messagesRef} onScroll={event => { const element = event.currentTarget; autoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
+      {session.messages.map((message, index) => <article key={message.id} className={`${styles.message} ${message.role === 'user' ? styles.userMessage : styles.assistantMessage}`} aria-label={message.role === 'user' ? t.user : t.assistant}>
+        <div className={styles.messageLabel}><span>{message.role === 'user' ? t.user : t.assistant}</span>{message.mode === 'extract' && <span className={styles.excerptLabel}>{t.excerpt}</span>}</div>
+        {message.role === 'user' ? <p className={styles.userText}>{message.content}</p> : <>
+          {message.content ? <div className={styles.answer}><ReactMarkdown components={{
+            a: ({ children }) => <span>{children}</span>,
+            img: ({ alt }) => <span>{alt || ''}</span>,
+            p: ({ children }) => <p>{citeSources(children, message.sources, language)}</p>,
+            li: ({ children }) => <li>{citeSources(children, message.sources, language)}</li>,
+          }}>{message.content}</ReactMarkdown></div> : message.status === 'streaming' ? <p className={styles.working}>{t.working}</p> : null}
+          <Sources sources={message.sources} language={language} />
+          {message.status === 'stopped' && <p className={styles.status}>{message.stopUnconfirmed ? t.stopUnconfirmed : t.stopped}</p>}
+          {message.status === 'error' && <p role="alert" className={styles.error}>{errorText(message.error)}</p>}
+          {['stopped', 'error'].includes(message.status) && index === session.messages.length - 1 && lastUser && message.error?.retryable !== false && <button className={styles.retryButton} type="button" onClick={() => sendQuestion(lastUser.content, true)} disabled={busy}>{t.retry}<span aria-hidden="true"> ↗</span></button>}
+        </>}
+      </article>)}
+    </div></section>}
+    <form className={styles.composer} onSubmit={submit}>
+      <label className={styles.srOnly} htmlFor="guide-question">{t.question}</label>
+      <textarea id="guide-question" value={input} maxLength={MAX_INPUT} onChange={event => setInput(event.target.value)} onKeyDown={keyDown} rows={2} placeholder={t.placeholder} disabled={busy} aria-describedby="input-note" />
+      <div className={styles.composerBottom}><span id="input-note" className={styles.inputNote}>{input.length > 1400 ? `${input.length} / ${MAX_INPUT}` : t.keyboard}</span>{loading ? <button className={styles.stopButton} type="button" onClick={() => void stop()}>{t.stop}<span className={styles.stopSquare} aria-hidden="true" /></button> : <button className={styles.sendButton} type="submit" disabled={!input.trim() || busy}>{stopping ? t.stopping : t.send}<span aria-hidden="true"> ↗</span></button>}</div>
+    </form>
+    <footer className={styles.footer}><p>{t.privacy}</p>{!hasMessages && <button className={styles.textButton} type="button" onClick={reset}>{t.reset}</button>}</footer>
+    <div className={styles.srOnly} role="status" aria-live="polite">{announcement}</div>
+  </div></main>;
 }

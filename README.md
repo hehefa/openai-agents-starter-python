@@ -1,87 +1,45 @@
-# OpenAI Agents Starter (Python)
+# 作品导览 / Works guide
 
-A full-stack EdgeOne Makers Agent template — streaming chat backed by the OpenAI Agents SDK (Python), with custom tools and `context.store`-backed conversation memory.
+A bilingual public-works guide for He Fa and P4 Theater, based on the existing EdgeOne Makers OpenAI Agents Python starter. It uses reviewed snapshots of the two official sites and links each factual answer to its source. The model is never given control of link destinations.
 
-**Framework:** OpenAI Agents SDK · **Category:** Quick Start <!-- TODO: confirm --> · **Language:** Python
+- App: `/`, with `?lang=zh|en&site=hefa|p4`.
+- Compact iframe: `/?embed=1&site=hefa&lang=zh`.
+- Explicit model-free quotation check: add `&mode=extract`. This quotes evidence and labels its limits; it does not silently replace a failed model answer.
+- `POST /chat`: bounded SSE answer; `POST /chat/stop`: cancel the actual upstream run.
+- `GET /guide-status`: read-only deployment check, no model call; includes snapshot version/count/hash, model id, gateway hostname and a configuration boolean. No secrets are returned.
 
-[![Deploy to EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/makers/new?template=openai-agents-starter-python&from=within&fromAgent=1&agentLang=python)
+## Run locally
 
-<!-- ![preview](./assets/preview.png)  TODO: confirm -->
-
-## Overview
-
-A minimal, production-shaped Python starter that wires the OpenAI Agents SDK into EdgeOne Makers. Demonstrates the full chat loop — SSE streaming, custom tool registration, conversation persistence — so you can fork it and start replacing the toy tools (`get_weather`, `get_clothing_advice`, `translate_text`, `text_statistics`) with real ones.
-
-- **SSE streaming chat** — token-by-token `text_delta` events plus `tool_called` events.
-- **Custom Agent tools** — four sample `@function_tool` definitions, ready to be replaced.
-- **Sticky conversation memory** — `context.store.openai_session(cid)` plugs straight into `Runner.run_streamed()`'s `session` parameter.
-- **Honest cancellation** — backend `context.utils.abort_active_run()` truly interrupts the LLM call.
-- **Two-folder backend** — long-running stateful work in `agents/`, short stateless `/history` in `cloud-functions/`.
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `AI_GATEWAY_API_KEY` | Yes | Model gateway API key. Use your Makers Models API Key, or any OpenAI-compatible provider key. |
-| `AI_GATEWAY_BASE_URL` | Yes | Gateway base URL. For Makers Models, use `https://ai-gateway.edgeone.link/v1`. |
-| `AI_GATEWAY_MODEL` | No | Model ID. Defaults to `@makers/deepseek-v4-flash` (a free built-in model). |
-
-This template follows the OpenAI-compatible standard — point these at Makers Models or any compatible provider.
-
-### How to get `AI_GATEWAY_API_KEY`
-
-1. Open the [Makers Console](https://edgeone.ai/makers/new?s_url=https://console.tencentcloud.com/edgeone/makers).
-2. Sign in and enable Makers.
-3. Go to **Makers → Models → API Key** and create a key.
-4. Copy it into `AI_GATEWAY_API_KEY`.
-
-The built-in `@makers/deepseek-v4-flash` model is free with a usage cap and is suitable for prototyping. For production, bind your own paid provider (BYOK).
-
-## Local Development
-
-Prerequisites: Node.js ≥ 18, Python ≥ 3.10, and the EdgeOne CLI (`npm i -g edgeone`).
-
-```bash
-npm install
-pip install -r requirements.txt
-cp .env.example .env       # then fill in AI_GATEWAY_API_KEY / AI_GATEWAY_BASE_URL
-edgeone makers dev
+```sh
+npm ci
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+npm run dev:agents
 ```
 
-Local agent metrics & traces are exposed at `http://localhost:8080/agent-metrics`.
+The existing gateway variables are `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL` and optional `AI_GATEWAY_MODEL`. Runtime `context.env` takes precedence over OS environment. The original model default remains `@makers/deepseek-v4-flash`; this app does not create a key, subscribe to a service or choose another provider. Missing configuration and upstream failures produce a readable retry state. Using any deployed model remains subject to that project's actual quota and pricing.
 
-## Project Structure
+## Knowledge and response boundary
 
-```text
-openAI-agent-starter-python/
-├── agents/                          # Stateful EdgeOne Makers Agent Functions (Python)
-│   ├── chat/index.py               # POST /chat — SSE streaming chat
-│   ├── chat/stop.py                # POST /chat/stop — abort active run
-│   ├── _logger.py                  # Logger utility (private)
-│   └── _tools.py                   # Agent tool definitions (private)
-├── cloud-functions/                 # Stateless EdgeOne Makers Python cloud functions
-│   ├── history/index.py            # POST /history — load conversation messages
-│   └── _logger.py                  # Logger utility
-├── src/                             # React + Vite + TypeScript frontend
-│   ├── App.tsx                     # Main app + SSE stream lifecycle
-│   ├── api.ts                      # /chat, /chat/stop, /history wrappers
-│   └── components/                 # ChatWindow, ChatInput, CodeViewer, ToolIndicators, ...
-├── package.json                     # Frontend dependencies
-├── requirements.txt                 # Python dependencies
-├── edgeone.json                     # framework=openai-agents-sdk
-├── vite.config.ts
-├── tsconfig.json
-└── .gitignore
+`agents/_knowledge/corpus.json` contains public snapshot text, URLs, provenance hashes and attribution/status metadata. Only HTTPS URLs on `hefa.p4theater.cn` or `p4theater.cn` are accepted. Retrieval uses local Chinese bigrams, English terms, reviewed title aliases and BM25-style scoring; no vector service is used. Source HTML and fetched receipts are retained separately in the preparation package rather than shipped as public assets.
+
+Import a replacement **reviewed** corpus and refresh the status manifest:
+
+```sh
+.venv/bin/python scripts/import_corpus.py /absolute/path/to/corpus.json
 ```
 
-> Files prefixed with `_` are private modules — not exposed as public routes.
+The server selects up to six evidence passages, then makes at most one bounded model run. The SDK receives no tools and no source URLs. Raw upstream output is buffered until paragraph-level evidence ids, URLs, named works, dates and relevant collective credits pass checks; validated text is then released as SSE chunks. Each source card's URL comes exclusively from the accepted corpus. These checks reduce fabrication; they do not amount to a formal semantic proof of every paraphrase. Public deployment evaluation should include factual reading of model answers.
 
-## Resources
+The app declines unsupported private-life questions and frame-by-frame viewing claims. Fiction, collaborations, proposals, historical records and current identity must remain distinct. Prompt/evidence instructions are treated as untrusted text.
 
-- [EdgeOne Makers Agents — Documentation](https://pages.edgeone.ai/document/agents)
-- [EdgeOne Makers — Quick Start](https://pages.edgeone.ai/document/agents-quick-start)
-- [Makers Models](https://pages.edgeone.ai/document/models)
+Limits: input 1,600 characters; six context messages / 3,600 characters; six passages / 11,500 source-text characters; model output 1,200 tokens; one run turn; client automatic retries disabled; 45-second model deadline. Short conversation memory lives in sessionStorage; the app does not write new conversation history into the template's persistent store. Application tracing and sensitive logging are disabled. Platform-level operational retention remains governed by EdgeOne.
 
-## License
+## Verify
 
-MIT.
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+npm run build
+```
+
+Tests make no provider calls. They include retrieval, attribution, unknown/private/fiction boundaries, input/context limits, citation/URL checks, cancellation, timeout, gateway failures and a real SDK stream against a loopback fake gateway. Deployment, public iframe embedding and real quota-limited model evaluation must be verified separately.
