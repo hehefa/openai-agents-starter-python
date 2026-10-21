@@ -261,7 +261,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         fake_client.close.assert_awaited_once()
         self.assertEqual(runner.call_args.kwargs["max_turns"], 1)
         self.assertTrue(runner.call_args.kwargs["run_config"].tracing_disabled)
-        self.assertEqual(runner.call_args.args[0].model_settings.max_tokens, 1200)
+        self.assertEqual(runner.call_args.args[0].model_settings.max_tokens, 2400)
         self.assertEqual(runner.call_args.args[0].model.model, "@makers/deepseek-v4-flash")
 
     async def test_timeout_releases_upstream_without_retry(self):

@@ -19,6 +19,37 @@ chat = importlib.import_module("works_runtime.chat.index")
 
 
 class SdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reasoning_only_length_finish_is_sdk_behavior_error(self):
+        # This is an offline reproduction of one possible SDK failure path, not
+        # proof of the cause of any particular production ModelBehaviorError.
+        from agents.exceptions import ModelBehaviorError
+        from agents.models.chatcmpl_stream_handler import ChatCmplStreamHandler
+        from openai.types.chat import ChatCompletionChunk
+        from openai.types.responses import Response
+
+        async def chunks():
+            yield ChatCompletionChunk(
+                id="offline", created=0, model="@makers/deepseek-v4-flash",
+                object="chat.completion.chunk",
+                choices=[{"index": 0, "delta": {"reasoning_content": "offline reasoning only"}, "finish_reason": None}],
+            )
+            yield ChatCompletionChunk(
+                id="offline", created=0, model="@makers/deepseek-v4-flash",
+                object="chat.completion.chunk",
+                choices=[{"index": 0, "delta": {}, "finish_reason": "length"}],
+                usage={"prompt_tokens": 100, "completion_tokens": 1200, "total_tokens": 1300},
+            )
+        response = Response.model_construct(
+            id="offline", created_at=0, model="@makers/deepseek-v4-flash", object="response",
+            output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], usage=None,
+        )
+        with self.assertRaisesRegex(ModelBehaviorError, "finish_reason='length'.*no assistant text"):
+            async for _ in ChatCmplStreamHandler.handle_stream(
+                response, chunks(), model="@makers/deepseek-v4-flash",
+                raise_on_length_truncation=True, require_finish_reason=False,
+            ):
+                pass
+
     async def test_real_sdk_stream_and_explicit_runtime_config(self):
         requests = []
         answer = json.dumps({"blocks": [{"text": "YourTube is a 2018 installation.", "evidence_ids": ["E1"]}], "uncertain": False})
@@ -49,7 +80,7 @@ class SdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["model"], "@makers/deepseek-v4-flash")
             self.assertTrue(requests[0]["stream"])
-            self.assertEqual(requests[0].get("max_tokens") or requests[0].get("max_completion_tokens"), 1200)
+            self.assertEqual(requests[0].get("max_tokens") or requests[0].get("max_completion_tokens"), 2400)
             self.assertFalse(requests[0].get("tools"))
         finally:
             server.shutdown()

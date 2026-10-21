@@ -54,7 +54,7 @@ async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_e
         model=env("AI_GATEWAY_MODEL", "@makers/deepseek-v4-flash"), openai_client=client,
     )
     agent = Agent(name="Public works guide", instructions=MODEL_INSTRUCTIONS, model=model,
-                  model_settings=ModelSettings(max_tokens=1200, store=False), tools=[])
+                  model_settings=ModelSettings(max_tokens=2400, store=False), tools=[])
     result = None
     pending = None
     cancel_wait = None

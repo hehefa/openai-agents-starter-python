@@ -33,7 +33,7 @@ The server selects up to six evidence passages, then makes at most one bounded m
 
 The app declines unsupported private-life questions and frame-by-frame viewing claims. Fiction, collaborations, proposals, historical records and current identity must remain distinct. Prompt/evidence instructions are treated as untrusted text.
 
-Limits: input 1,600 characters; six context messages / 3,600 characters; six passages / 11,500 source-text characters; model output 1,200 tokens; one run turn; client automatic retries disabled; 45-second model deadline. Short conversation memory lives in sessionStorage; the app does not write new conversation history into the template's persistent store. Application tracing and sensitive logging are disabled. Platform-level operational retention remains governed by EdgeOne.
+Limits: input 1,600 characters; six context messages / 3,600 characters; six passages / 11,500 source-text characters; model generation budget 2,400 tokens; one run turn; client automatic retries disabled; 45-second model deadline. Short conversation memory lives in sessionStorage; the app does not write new conversation history into the template's persistent store. Application tracing and sensitive logging are disabled. Platform-level operational retention remains governed by EdgeOne.
 
 ## Verify
 
@@ -42,4 +42,4 @@ Limits: input 1,600 characters; six context messages / 3,600 characters; six pas
 npm run build
 ```
 
-Tests make no provider calls. They include retrieval, attribution, unknown/private/fiction boundaries, input/context limits, citation/URL checks, cancellation, timeout, gateway failures and a real SDK stream against a loopback fake gateway. Deployment, public iframe embedding and real quota-limited model evaluation must be verified separately.
+Tests make no provider calls. They include retrieval, attribution, unknown/private/fiction boundaries, input/context limits, citation/URL checks, cancellation, timeout, gateway failures, a real SDK stream against a loopback fake gateway and a reasoning-only length-finish reproduction. That reproduction demonstrates a possible SDK error path; the production exception type alone does not establish its exact cause. Deployment, public iframe embedding and real quota-limited model evaluation must be verified separately.
