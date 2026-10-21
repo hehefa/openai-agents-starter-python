@@ -35,6 +35,8 @@ The app declines unsupported private-life questions and frame-by-frame viewing c
 
 Limits: input 1,600 characters; six context messages / 3,600 characters; six passages / 11,500 source-text characters; model generation budget 2,400 tokens; one run turn; client automatic retries disabled; 45-second model deadline. Short conversation memory lives in sessionStorage; the app does not write new conversation history into the template's persistent store. Application tracing and sensitive logging are disabled. Platform-level operational retention remains governed by EdgeOne.
 
+The request uses DeepSeek's documented `thinking: {type: "disabled"}` via SDK `extra_body`. Loopback tests verify serialization; Makers gateway forwarding and the effect on the built-in model require live verification. SDK behavior failures log only a finite classification, never raw reasoning, answers or exception bodies.
+
 ## Verify
 
 ```sh

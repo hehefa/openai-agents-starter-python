@@ -26,6 +26,26 @@ def sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _model_behavior_reason(exc: Exception, reasoning_seen: bool = False) -> str:
+    """Classify known SDK failures; never return provider/error content."""
+    message = str(exc)
+    if message == ("Chat Completions stream terminated with finish_reason='length' "
+                   "but produced no assistant text, tool call, or refusal."):
+        return "length_reasoning_only" if reasoning_seen else "length_no_text"
+    if message == "Model did not produce a final response!":
+        return "reasoning_no_final" if reasoning_seen else "no_final"
+    if message == "Chat Completions stream ended before receiving a finish_reason for choice 0.":
+        return "missing_finish_reason"
+    if message.startswith("Expected streamed thinking block field '"):
+        return "malformed_thinking"
+    if message.startswith("Buffered Chat Completions tool call stream ended without ") or message == (
+        "Chat Completions stream finished with finish_reason='tool_calls' "
+        "but did not include any streamed tool call deltas."
+    ):
+        return "malformed_tool_stream"
+    return "other"
+
+
 async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_env: Any = None) -> str:
     # Lazy imports allow a useful, explicit unavailable state without credentials
     # and let free offline validation run without loading the SDK at all.
@@ -48,16 +68,19 @@ async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_e
     from openai import AsyncOpenAI
     from openai.types.responses import ResponseTextDeltaEvent
     from agents import Agent, ModelSettings, OpenAIChatCompletionsModel, Runner, RunConfig
+    from agents.exceptions import ModelBehaviorError
 
     client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=40, max_retries=0)
     model = OpenAIChatCompletionsModel(
         model=env("AI_GATEWAY_MODEL", "@makers/deepseek-v4-flash"), openai_client=client,
     )
     agent = Agent(name="Public works guide", instructions=MODEL_INSTRUCTIONS, model=model,
-                  model_settings=ModelSettings(max_tokens=2400, store=False), tools=[])
+                  model_settings=ModelSettings(max_tokens=2400, store=False,
+                                               extra_body={"thinking": {"type": "disabled"}}), tools=[])
     result = None
     pending = None
     cancel_wait = None
+    reasoning_seen = False
     try:
         result = Runner.run_streamed(
             agent, input=prompt, max_turns=1,
@@ -83,12 +106,19 @@ async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_e
                     break
                 finally:
                     pending = None
-                if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                    chunks.append(event.data.delta)
-                    size += len(event.data.delta)
-                    if size > 16000:
-                        raise GuideError("invalid", reason="size")
+                if event.type == "raw_response_event":
+                    # Observe only presence, never retain or log reasoning text.
+                    if getattr(event.data, "type", "").startswith("response.reasoning") and getattr(event.data, "delta", None):
+                        reasoning_seen = True
+                    if isinstance(event.data, ResponseTextDeltaEvent):
+                        chunks.append(event.data.delta)
+                        size += len(event.data.delta)
+                        if size > 16000:
+                            raise GuideError("invalid", reason="size")
         return "".join(chunks) or str(result.final_output or "")
+    except ModelBehaviorError as exc:
+        logger.error("model_behavior", _model_behavior_reason(exc, reasoning_seen))
+        raise
     finally:
         # Cancel the actual upstream run as well as the frontend stream.
         if result is not None:

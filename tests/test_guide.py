@@ -287,6 +287,31 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
                 await chat._run_model("no call", None, {})
         self.assertEqual(raised.exception.code, "config")
 
+    async def test_sdk_behavior_logs_only_finite_reason_and_closes_without_retry(self):
+        import agents
+        from agents.exceptions import ModelBehaviorError
+        fake_client = SimpleNamespace(close=AsyncMock())
+        class Result:
+            cancelled = False
+            def cancel(self): self.cancelled = True
+            async def stream_events(self):
+                yield SimpleNamespace(type="raw_response_event", data=SimpleNamespace(
+                    type="response.reasoning_summary_text.delta", delta="reasoning-must-not-be-logged"))
+                raise ModelBehaviorError("Chat Completions stream terminated with finish_reason='length' "
+                                         "but produced no assistant text, tool call, or refusal.")
+        result = Result()
+        with patch("openai.AsyncOpenAI", return_value=fake_client), patch.object(agents.Runner, "run_streamed", return_value=result) as runner, patch.object(chat.logger, "error") as log:
+            with self.assertRaises(ModelBehaviorError):
+                await chat._run_model("user-must-not-be-logged", None, {"AI_GATEWAY_API_KEY": "key-must-not-be-logged", "AI_GATEWAY_BASE_URL": "https://example.invalid/v1"})
+        log.assert_called_once_with("model_behavior", "length_reasoning_only")
+        self.assertNotIn("must-not-be-logged", str(log.call_args))
+        runner.assert_called_once()
+        self.assertTrue(result.cancelled)
+        fake_client.close.assert_awaited_once()
+        self.assertEqual(chat._model_behavior_reason(ModelBehaviorError("provider-secret")), "other")
+        self.assertEqual(chat._model_behavior_reason(ModelBehaviorError("Model did not produce a final response!")), "no_final")
+        self.assertEqual(chat._model_behavior_reason(ModelBehaviorError("Model did not produce a final response!"), True), "reasoning_no_final")
+
     async def test_cancel_releases_upstream_run_and_client(self):
         import agents
         signal = asyncio.Event()
@@ -309,6 +334,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.call_args.kwargs["max_turns"], 1)
         self.assertTrue(runner.call_args.kwargs["run_config"].tracing_disabled)
         self.assertEqual(runner.call_args.args[0].model_settings.max_tokens, 2400)
+        self.assertEqual(runner.call_args.args[0].model_settings.extra_body, {"thinking": {"type": "disabled"}})
         self.assertEqual(runner.call_args.args[0].model.model, "@makers/deepseek-v4-flash")
 
     async def test_timeout_releases_upstream_without_retry(self):

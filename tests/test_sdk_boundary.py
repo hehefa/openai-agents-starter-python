@@ -81,6 +81,7 @@ class SdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(requests[0]["model"], "@makers/deepseek-v4-flash")
             self.assertTrue(requests[0]["stream"])
             self.assertEqual(requests[0].get("max_tokens") or requests[0].get("max_completion_tokens"), 2400)
+            self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
             self.assertFalse(requests[0].get("tools"))
         finally:
             server.shutdown()
