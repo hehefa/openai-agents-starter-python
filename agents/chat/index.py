@@ -87,7 +87,7 @@ async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_e
                     chunks.append(event.data.delta)
                     size += len(event.data.delta)
                     if size > 16000:
-                        raise GuideError("invalid")
+                        raise GuideError("invalid", reason="size")
         return "".join(chunks) or str(result.final_output or "")
     finally:
         # Cancel the actual upstream run as well as the frontend stream.
@@ -143,6 +143,8 @@ async def handler(context: Any) -> AsyncGenerator[str, None]:
     except asyncio.CancelledError:
         stopped = True
     except GuideError as exc:
+        if exc.code == "invalid":
+            logger.error("answer_rejected", exc.reason)
         yield sse_event("error", {"code": exc.code, "message": COPY[language].get(exc.code, COPY[language]["upstream"]),
                                   "retryable": exc.retryable})
     except Exception as exc:

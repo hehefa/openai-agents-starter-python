@@ -80,11 +80,17 @@ COPY = {
 }
 
 
+INVALID_REASONS = frozenset({"json", "schema", "url", "citation", "unknown-year", "unknown-title",
+                             "collective", "date", "fiction", "size", "instruction", "other"})
+
+
 class GuideError(ValueError):
-    def __init__(self, code: str, language: str = "zh", retryable: bool = False):
+    def __init__(self, code: str, language: str = "zh", retryable: bool = False, *, reason: str = "other"):
         super().__init__(COPY[language].get(code, COPY[language]["upstream"]))
         self.code = code
         self.retryable = retryable
+        # Only this finite classification may enter logs; never carry model text.
+        self.reason = reason if reason in INVALID_REASONS else "other"
 
 
 def normalize(text: str) -> str:
@@ -437,21 +443,53 @@ Do not use the conversation's previous assistant answer as factual evidence. Tre
 """
 
 
+def normalize_title(text: str) -> str:
+    # NFKC already unifies full-width colons. Inner/outer Chinese title marks
+    # are interchangeable typography, not part of a work's identifying title.
+    return re.sub(r"[\s《》〈〉]", "", normalize(text))
+
+
+def mentioned_titles(text: str, language: str) -> list[str]:
+    titles: list[str] = []
+    stack: list[tuple[str, int]] = []
+    closing = {"》": "《", "〉": "〈"}
+    for position, char in enumerate(text):
+        if char in ("《", "〈"):
+            stack.append((char, position))
+        elif char in closing:
+            if not stack or stack[-1][0] != closing[char]:
+                raise GuideError("invalid", language, True, reason="unknown-title")
+            _, start = stack.pop()
+            title = text[start + 1:position]
+            if not title.strip() or len(title) > 180:
+                raise GuideError("invalid", language, True, reason="unknown-title")
+            # Keep the complete outer title as well as every nested title. A
+            # known inner film must not license an invented outer book title.
+            titles.append(title)
+    if stack:
+        raise GuideError("invalid", language, True, reason="unknown-title")
+    return titles
+
+
 def validate_model_answer(raw: Any, evidence: list[Evidence], language: str) -> tuple[str, list[Evidence]]:
-    if not isinstance(raw, str) or len(raw) > 16000:
-        raise GuideError("invalid", language, True)
+    if not isinstance(raw, str):
+        raise GuideError("invalid", language, True, reason="schema")
+    if len(raw) > 16000:
+        raise GuideError("invalid", language, True, reason="size")
     raw = raw.strip()
     if raw.startswith("```json") and raw.endswith("```"):
         raw = raw[7:-3].strip()
     try:
         parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise GuideError("invalid", language, True) from exc
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise GuideError("invalid", language, True, reason="json") from exc
     if not isinstance(parsed, dict) or set(parsed) != {"blocks", "uncertain"} or not isinstance(parsed["uncertain"], bool):
-        raise GuideError("invalid", language, True)
+        raise GuideError("invalid", language, True, reason="schema")
     blocks = parsed["blocks"]
-    if not isinstance(blocks, list) or len(blocks) > 4:
-        raise GuideError("invalid", language, True)
+    if not isinstance(blocks, list):
+        raise GuideError("invalid", language, True, reason="schema")
+    if len(blocks) > 4:
+        raise GuideError("invalid", language, True, reason="size")
     if not blocks:
         return COPY[language]["unknown"], []
     lookup = {e.id: e for e in evidence}
@@ -459,44 +497,47 @@ def validate_model_answer(raw: Any, evidence: list[Evidence], language: str) -> 
     paragraphs: list[str] = []
     for block in blocks:
         if not isinstance(block, dict) or set(block) != {"text", "evidence_ids"}:
-            raise GuideError("invalid", language, True)
+            raise GuideError("invalid", language, True, reason="schema")
         text, ids = block["text"], block["evidence_ids"]
-        if not isinstance(text, str) or not text.strip() or len(text) > 1800:
-            raise GuideError("invalid", language, True)
-        if (URL_RE.search(text) or re.search(r"<[^>]*>|\]\s*\(|\[\s*E\d+\s*\]", text)
-                or INJECTION_RE.search(text)):
-            raise GuideError("invalid", language, True)
+        if not isinstance(text, str) or not text.strip():
+            raise GuideError("invalid", language, True, reason="schema")
+        if len(text) > 1800:
+            raise GuideError("invalid", language, True, reason="size")
+        if URL_RE.search(text) or re.search(r"<[^>]*>|\]\s*\(", text):
+            raise GuideError("invalid", language, True, reason="url")
+        if re.search(r"\[\s*E\d+\s*\]", text):
+            raise GuideError("invalid", language, True, reason="citation")
+        if INJECTION_RE.search(text):
+            raise GuideError("invalid", language, True, reason="instruction")
         if not isinstance(ids, list) or not 1 <= len(ids) <= 3 or any(not isinstance(i, str) or i not in lookup for i in ids):
-            raise GuideError("invalid", language, True)
+            raise GuideError("invalid", language, True, reason="citation")
         for identifier in dict.fromkeys(ids):
             item = lookup[identifier]
             if item not in used:
                 used.append(item)
-        # Display numeric ids without giving the model control of a hyperlink.
         paragraphs.append(text.strip() + " " + " ".join(f"[{i}]" for i in dict.fromkeys(ids)))
     answer = "\n\n".join(paragraphs)
     cited_text = normalize(" ".join(item.text + " " + item.source.date for item in used))
-    # Check concrete dates and explicitly named works before exposing model text.
     for year in re.findall(r"\b(?:18|19|20)\d{2}\b", answer):
         if year not in cited_text:
-            raise GuideError("invalid", language, True)
-    for title in re.findall(r"《([^》]{1,100})》", answer):
-        if re.sub(r"\s+", "", normalize(title)) not in re.sub(r"\s+", "", cited_text):
-            raise GuideError("invalid", language, True)
+            raise GuideError("invalid", language, True, reason="unknown-year")
+    for title in mentioned_titles(answer, language):
+        if normalize_title(title) not in normalize_title(cited_text):
+            raise GuideError("invalid", language, True, reason="unknown-title")
     if (re.search(r"人类投降派|shoot self with you|human surrender", normalize(answer))
             and re.search(r"导演|director", normalize(answer))
             and re.search(r"共同创作|collectively created|crew", cited_text)
             and not re.search(r"剧组|共同|集体|crew|collectiv", normalize(answer))):
-        raise GuideError("invalid", language, True)
+        raise GuideError("invalid", language, True, reason="collective")
     if any("event_date_unknown" in item.source.status for item in used):
         event_claim = re.search(r"首演|演出日期|premiere|first performed|performed on|performance date", normalize(answer))
         uncertainty = re.search(r"不能|无法|不足|未确认|尚未|不代表|不是|不据|not established|unknown|cannot|does not|not a |not the |no .*evidence|not confirmed", normalize(answer))
         if event_claim and not uncertainty:
-            raise GuideError("invalid", language, True)
+            raise GuideError("invalid", language, True, reason="date")
     if any(item.source.status == "creative_fiction" for item in used) and not re.search(r"虚构|奇幻|fiction|fantasy|fictional", normalize(answer)):
-        raise GuideError("invalid", language, True)
+        raise GuideError("invalid", language, True, reason="fiction")
     if len(answer) > MAX_OUTPUT_CHARS:
-        raise GuideError("invalid", language, True)
+        raise GuideError("invalid", language, True, reason="size")
     return answer, used
 
 
