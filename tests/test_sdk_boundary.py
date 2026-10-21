@@ -83,6 +83,11 @@ class SdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(requests[0].get("max_tokens") or requests[0].get("max_completion_tokens"), 2400)
             self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
             self.assertFalse(requests[0].get("tools"))
+            # The actual SDK request must retain both positive authorship facts
+            # and the formal English-edition boundary supplied to the agent.
+            instructions = " ".join(str(message.get("content", "")) for message in requests[0]["messages"] if message["role"] in ("system", "developer"))
+            for contract in ("both facts coexist", "an attitude He Fa insists on", "do not downgrade his director identity", "not a verbatim transcription", "formal complete English edition", "not an independent English monograph"):
+                self.assertIn(contract, instructions)
         finally:
             server.shutdown()
             server.server_close()

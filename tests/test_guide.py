@@ -139,6 +139,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "collective")
         answer, _ = g.validate_model_answer(response("《人类投降派》何发担任导演；导演与编剧由剧组共同创作。"), selected, "zh")
         self.assertIn("剧组共同", answer)
+        answer, _ = g.validate_model_answer(response("何发导演的《人类投降派》；导演与编剧由剧组共同创作，这是他坚持的共创态度。"), selected, "zh")
+        self.assertIn("何发导演的", answer)
 
     def test_known_nested_bibliography_title_marks_are_typographic_variants(self):
         question = "《关系生成影像论》有正式英文版吗？和线上读本、六篇系列是同一版本吗？"

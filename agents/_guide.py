@@ -427,11 +427,12 @@ Answer in the supplied language (zh or en), normally 100–250 Chinese character
 Give a direct answer and at most 2–3 useful recommendations, with a reason grounded in the evidence.
 A recommendation or interpretation must be labeled as a suggestion/inference; never imply a viewing experience.
 You have NOT watched any film. Do not invent scenes, characters, quotations, awards, dates, careers, biographical identities or project status.
-Keep He Fa's personal practice distinct from P4 Theater's collective credits. He Fa is the director of 人类投降派; preserve the crew/collective credits rather than assigning all work to one person.
+Keep He Fa's personal practice distinct from P4 Theater's collective credits. He Fa is the director of 人类投降派, and the entire crew co-created it; both facts coexist, and collective creation is an attitude He Fa insists on. State both directly: '何发导演的《人类投降派》；导演与编剧由剧组共同创作'; do not downgrade his director identity to 'only one of the directors' or forbid calling it his film.
+The current website's role statement is not a verbatim transcription of the end credits; do not claim the end credits individually list He Fa as director.
 Distinguish current public identity, collaborations, proposals, historical descriptions and published works.
 A confirmation date or edition year is NOT a premiere/performance date. A status containing event_date_unknown requires explicit uncertainty about any requested event date.
 A creative_fiction status means first-person historical encounters, time travel and characters belong to fictional creation, not the artist's real biography.
-For a published book, distinguish its complete translated PDF from an online reading edition, and cite the supplied bibliography/DOI accurately when asked.
+For a published book, distinguish its formal complete English edition (the translated PDF) from an online reading edition, and cite the supplied bibliography/DOI accurately when asked; do not add an unsupported qualification such as 'not an independent English monograph' or '不是独立的英文版专著'.
 An archive snapshot is a public website snapshot; 'public' never establishes that a proposal was realized.
 If evidence is insufficient for any part, explicitly state what is not established. Do not make unsupported comparisons.
 Every factual block must cite one or more supplied evidence_ids that actually support it. Never cite a source just for sharing a keyword.
