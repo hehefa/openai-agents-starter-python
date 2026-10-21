@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .venv/
+.sync-cache/
 
 # Build outputs
 dist/

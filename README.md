@@ -29,6 +29,29 @@ Import a replacement **reviewed** corpus and refresh the status manifest:
 .venv/bin/python scripts/import_corpus.py /absolute/path/to/corpus.json
 ```
 
+### Automatic public-source sync
+
+`.github/workflows/sync-public-knowledge.yml` runs at minute 17 of each hour and supports manual `workflow_dispatch`. It uses the repository's own `GITHUB_TOKEN` with `contents: write`; no PAT, cross-repository access, model request, paid supplier or installed crawler dependency is needed. GitHub may delay scheduled runs. Private-repository runs consume the account's existing Actions allowance; the workflow has a three-minute limit and does not enable paid billing.
+
+The sync reads the two public `sitemap.xml` files and He Fa's public `data/works.json`, then verifies HTML, one matching canonical, indexing eligibility and a substantial `main`/`article` body. Discovery accepts both homepages, He Fa work/catalogue/reading/reference/profile routes, the fiction-project index and its twelve bilingual encounters, plus P4 knowledge/profile/project routes or individual dated articles. The separate historical-role archive is excluded; the fiction index and encounters retain their fiction labels. Newly added home/work-directory records have low retrieval priority. Archive/year indexes, arbitrary assets, queries, off-site URLs and redirects outside the two approved hosts are excluded. Chinese URL paths are encoded for transport and canonical comparison. Existing reviewed records remain eligible even if absent from a sitemap.
+
+Each run checks at most 256 pages and admits at most 32 new pages, with a 135-second fetch budget. Current identity/reference/film pages and changed `lastmod` entries take precedence; larger corpora rotate through remaining records. Newly discovered URLs take precedence over the previously seen backlog; remaining new candidates use recent `lastmod`/article dates first. Invalid new candidates rotate by their check time, so they cannot monopolize the same batch forever. Historical/fiction/proposal distinctions remain intact. The report includes remaining discovery and refresh counts. An optional `priority_urls` dispatch input prioritizes known public canonical URLs immediately after a site release. It does not grant access to other hosts or paths.
+
+Discovery stops safely above 2,500 URLs rather than allowing an unbounded crawl. The schedule and token behavior follow [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows) and [workflow-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+Conditional sitemap/metadata/page requests use ETag/Last-Modified in an optional Actions cache. Cache checks/timestamps are never committed. Navigation, floating guide controls, scripts and forms are excluded; whitespace or navigation-only changes retain the exact old record. Reviewed metadata, roles, status and source notes remain intact during automatic body refreshes. Existing aliases are retained and new public catalogue aliases are appended, including for an unchanged HTML page. New work metadata comes from the public work catalogue; new archive articles retain historical status, and He Fa's historical fantasy remains fiction. Reclassification of reviewed metadata remains an editorial operation through the reviewed-corpus import.
+
+A missing, noindex, noncanonical, unusually short or failed existing page aborts the batch and retains the entire previous corpus. Diagnostic stderr contains only source ids and fixed failure reasons, without response text or exceptions. Invalid new pages are skipped rather than replacing reviewed material. A successful content change updates text/raw-byte hashes and the matching deployment manifest, then commits only those two knowledge files. An old `raw_path` is removed when its HTML is replaced, because the original preparation receipt cannot attest new bytes. Concurrent pushes are never force-pushed; a conflict safely fails and the next run starts from current `main`.
+
+For a local preview (public HTTP only, no corpus write):
+
+```sh
+python3 scripts/sync_corpus.py
+python3 -m unittest discover -s tests -p test_sync_corpus.py -q
+```
+
+Add `--write` to update the local corpus and status manifest. After a bot commit, verify that EdgeOne actually created a successful deployment for that commit and that `/guide-status` matches the repository manifest. GitHub's token push does not trigger other Actions workflows; delivery to EdgeOne's separate Git integration must be verified, not assumed. Pull the resulting bot commit before running live QA, whose corpus count/hash preflight follows the local repository rather than a fixed count of 197.
+
 The server selects up to six evidence passages, then makes at most one bounded model run. The SDK receives no tools and no source URLs. Raw upstream output is buffered until paragraph-level evidence ids, URLs, named works, dates and relevant collective credits pass checks; validated text is then released as SSE chunks. Each source card's URL comes exclusively from the accepted corpus. These checks reduce fabrication; they do not amount to a formal semantic proof of every paraphrase. Public deployment evaluation should include factual reading of model answers.
 
 The app declines unsupported private-life questions and frame-by-frame viewing claims. Fiction, collaborations, proposals, historical records and current identity must remain distinct. Prompt/evidence instructions are treated as untrusted text.

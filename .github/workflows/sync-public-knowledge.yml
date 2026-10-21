@@ -1,0 +1,55 @@
+name: Sync public works knowledge
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      priority_urls:
+        description: 'Optional public canonical URLs to prioritize after a site release'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-public-knowledge
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v6.1.0
+        continue-on-error: true
+        with:
+          path: .sync-cache
+          key: public-knowledge-v1-${{ github.run_id }}
+          restore-keys: public-knowledge-v1-
+      - name: Offline sync regressions
+        run: python -m unittest discover -s tests -p test_sync_corpus.py -q
+      - name: Fetch and validate public canonical text
+        env:
+          PRIORITY_URLS: ${{ inputs.priority_urls }}
+        run: python scripts/sync_corpus.py --write --priority-urls "$PRIORITY_URLS"
+      - uses: actions/cache/save@v6.1.0
+        continue-on-error: true
+        with:
+          path: .sync-cache
+          key: public-knowledge-v1-${{ github.run_id }}
+      - name: Commit only changed knowledge
+        run: |
+          git add agents/_knowledge/corpus.json cloud-functions/guide-status/knowledge-status.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update public works knowledge'
+          git push origin HEAD:main
