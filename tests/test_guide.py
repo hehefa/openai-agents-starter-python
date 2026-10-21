@@ -212,9 +212,10 @@ class KnowledgeTests(unittest.TestCase):
         question = "何发是不是在1504年亲自见过达·芬奇？《何发论XXX》是不是他的真实传记？"
         selected = kb.retrieve(question, [], "hefa", "zh")
         self.assertIn("creative_fiction", g.model_prompt(question, [], selected, "zh"))
-        answer, _ = g.extract_answer(question, selected, "zh")
+        answer, used = g.extract_answer(question, selected, "zh")
         self.assertIn("虚构创作", answer)
-        self.assertEqual(answer.count("十二场奇幻穿越戏"), 1)
+        self.assertEqual(used[0].source.url, "https://hefa.p4theater.cn/hefa-on")
+        self.assertEqual(len(used), len({item.source.id for item in used}))
         with self.assertRaises(g.GuideError) as raised:
             g.validate_model_answer(response("何发曾遇见达芬奇。"), selected, "zh")
         self.assertEqual(raised.exception.reason, "fiction")
