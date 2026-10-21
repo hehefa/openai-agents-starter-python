@@ -13,7 +13,7 @@ import os
 from typing import Any, AsyncGenerator
 
 from .._guide import (
-    COPY, GuideError, MODEL_INSTRUCTIONS, extract_answer, get_knowledge,
+    COPY, CREDIT_REVIEW_INSTRUCTIONS, GuideError, MODEL_INSTRUCTIONS, extract_answer, get_knowledge,
     is_injection, model_prompt, request_boundary, validate_model_answer, validate_request,
 )
 from .._logger import create_logger
@@ -74,7 +74,13 @@ async def _run_model(prompt: str, cancel_signal: asyncio.Event | None, runtime_e
     model = OpenAIChatCompletionsModel(
         model=env("AI_GATEWAY_MODEL", "@makers/deepseek-v4-flash"), openai_client=client,
     )
-    agent = Agent(name="Public works guide", instructions=MODEL_INSTRUCTIONS, model=model,
+    instructions = MODEL_INSTRUCTIONS
+    try:
+        if json.loads(prompt).get("credit_review_requested") is True:
+            instructions += CREDIT_REVIEW_INSTRUCTIONS
+    except (ValueError, AttributeError):
+        pass
+    agent = Agent(name="Public works guide", instructions=instructions, model=model,
                   model_settings=ModelSettings(max_tokens=2400, store=False,
                                                extra_body={"thinking": {"type": "disabled"}}), tools=[])
     result = None

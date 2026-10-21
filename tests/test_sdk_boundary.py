@@ -86,8 +86,9 @@ class SdkBoundaryTest(unittest.IsolatedAsyncioTestCase):
             # The actual SDK request must retain both positive authorship facts
             # and the formal English-edition boundary supplied to the agent.
             instructions = " ".join(str(message.get("content", "")) for message in requests[0]["messages"] if message["role"] in ("system", "developer"))
-            for contract in ("both facts coexist", "an attitude He Fa insists on", "do not downgrade his director identity", "not a verbatim transcription", "formal complete English edition", "not an independent English monograph"):
+            for contract in ("both facts coexist", "an attitude He Fa insists on", "do not downgrade his director identity", "Do not volunteer end-credit audits", "formal complete English edition", "not an independent English monograph"):
                 self.assertIn(contract, instructions)
+            self.assertNotIn("verbatim transcription", instructions)
         finally:
             server.shutdown()
             server.server_close()

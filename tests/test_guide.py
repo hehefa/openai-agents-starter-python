@@ -77,6 +77,24 @@ class KnowledgeTests(unittest.TestCase):
         self.assertTrue(kb.retrieve("你的管道是什么？", [], "hefa", "zh"))
         self.assertTrue(kb.retrieve("What is YourTube?", [], "hefa", "en"))
 
+    def test_retrieval_deduplicates_canonical_urls_across_ids_and_chunks(self):
+        url = "https://hefa.p4theater.cn/work/yourtube"
+        long_text = ("YourTube seating connects viewers through its documented installation.\n" * 40)
+        kb = fixture_kb(fixture_source("one", url=url, text=long_text),
+                        fixture_source("two", url=url + "/", text=long_text + "More seating details."),
+                        fixture_source("another", text="YourTube seating was documented in this separate public record."))
+        selected = kb.retrieve("YourTube seating", [], "hefa", "en")
+        keys = [g.canonical_source_key(item.source.url) for item in selected]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(keys), 2)
+
+    def test_credit_review_intent_comes_from_explicit_current_question(self):
+        for question in ["何发与《人类投降派》是什么关系？", "Who directed Shoot Self with You?"]:
+            prompt = json.loads(g.model_prompt(question, [{"role": "user", "content": "核对片尾署名"}], evidence(), "zh"))
+            self.assertFalse(prompt["credit_review_requested"])
+        for question in ["请核对片尾署名", "What do the end credits actually list?"]:
+            self.assertTrue(json.loads(g.model_prompt(question, [], evidence(), "en"))["credit_review_requested"])
+
     def test_unknown_named_film_and_person_are_not_keyword_hits(self):
         kb = fixture_kb()
         for question in ["《不存在的电影123》的导演是谁？", "Who is John Fakesmith?", "张三的代表作是什么？"]:
@@ -121,6 +139,21 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("[E1]", answer)
         self.assertEqual(used[0].card()["url"], "https://hefa.p4theater.cn/work/work")
         with self.assertRaises(g.GuideError): g.validate_model_answer(response(ids=["E999"]), evidence(), "en")
+
+    def test_same_url_citations_share_one_card_without_losing_cited_evidence(self):
+        url = "https://hefa.p4theater.cn/work/yourtube"
+        kb = fixture_kb(fixture_source("one", url=url, text="YourTube is a 2018 installation."),
+                        fixture_source("two", url=url + "/", text="The expanded YourTube edition was documented in 2024."))
+        selected = [g.Evidence("E1", kb.sources[0], kb.sources[0].text, 9), g.Evidence("E3", kb.sources[1], kb.sources[1].text, 8)]
+        raw = json.dumps({"blocks": [{"text": "YourTube is a 2018 installation.", "evidence_ids": ["E1"]},
+                                    {"text": "An expanded edition was documented in 2024.", "evidence_ids": ["E3", "E1"]}], "uncertain": False})
+        answer, used = g.validate_model_answer(raw, selected, "en")
+        self.assertEqual([item.id for item in used], ["E1"])
+        self.assertEqual(answer.count("[E1]"), 2)
+        self.assertNotIn("[E3]", answer)
+        self.assertIn("2024", answer)  # Validated against E3 even after card merging.
+        _, extracted_sources = g.extract_answer("YourTube", selected, "en")
+        self.assertEqual(len(extracted_sources), 1)
 
     def test_validation_rejects_urls_html_and_missing_citations(self):
         for text in ["Visit https://evil.com", "Visit [source](//evil.com)", "<a href='javascript:alert(1)'>x</a>", "Visit evil.com"]:
@@ -289,6 +322,21 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(g.GuideError) as raised:
                 await chat._run_model("no call", None, {})
         self.assertEqual(raised.exception.code, "config")
+
+    async def test_end_credit_audit_instruction_is_absent_unless_requested(self):
+        import agents
+        fake_client = SimpleNamespace(close=AsyncMock())
+        class Result:
+            final_output = response()
+            def cancel(self): pass
+            async def stream_events(self):
+                if False: yield None
+        for question, review in [("何发与《人类投降派》是什么关系？", False), ("请核对片尾署名", True)]:
+            with patch("openai.AsyncOpenAI", return_value=fake_client), patch.object(agents.Runner, "run_streamed", return_value=Result()) as runner:
+                await chat._run_model(g.model_prompt(question, [], evidence(), "zh"), None, {"AI_GATEWAY_API_KEY": "test", "AI_GATEWAY_BASE_URL": "https://example.invalid/v1"})
+            instructions = runner.call_args.args[0].instructions
+            self.assertIn("both facts coexist", instructions)
+            self.assertEqual("verbatim transcription" in instructions, review)
 
     async def test_sdk_behavior_logs_only_finite_reason_and_closes_without_retry(self):
         import agents

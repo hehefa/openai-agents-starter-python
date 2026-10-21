@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 from typing import Any
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 MAX_MESSAGE_CHARS = 1600
 MAX_HISTORY_ITEMS = 6
@@ -107,6 +107,13 @@ def safe_source_url(url: Any) -> bool:
                 and not any(ord(c) < 32 for c in url) and "\\" not in url)
     except (ValueError, TypeError):
         return False
+
+
+def canonical_source_key(url: str) -> str:
+    parts = urlsplit(url)
+    path = quote(parts.path, safe="/%:@!$&'()*+,;=-._~").rstrip("/") or "/"
+    path = re.sub(r"%[a-fA-F0-9]{2}", lambda match: match[0].upper(), path)
+    return urlunsplit((parts.scheme.lower(), parts.hostname.lower(), path, parts.query, ""))
 
 
 def tokenize(text: str) -> list[str]:
@@ -349,12 +356,13 @@ class KnowledgeBase:
                 candidates.append((score, source, chunk))
         candidates.sort(key=lambda c: c[0], reverse=True)
         evidence: list[Evidence] = []
-        source_counts: Counter = Counter()
+        source_urls: set[str] = set()
         remaining = MAX_CONTEXT_CHARS
         for score, source, chunk in candidates:
             if len(evidence) >= MAX_EVIDENCE or remaining < 300:
                 break
-            if source_counts[source.id] >= 2:
+            source_key = canonical_source_key(source.url)
+            if source_key in source_urls:
                 continue
             # Avoid identical bilingual/navigation snapshots dominating results.
             if any(e.text == chunk for e in evidence):
@@ -375,7 +383,7 @@ class KnowledgeBase:
             if any(re.sub(r"\s+", "", item.text) == re.sub(r"\s+", "", selected) for item in evidence):
                 continue
             evidence.append(Evidence(f"E{len(evidence) + 1}", source, selected, round(score, 3)))
-            source_counts[source.id] += 1
+            source_urls.add(source_key)
             remaining -= len(selected)
         return evidence
 
@@ -415,6 +423,7 @@ def request_boundary(message: str) -> str | None:
 
 def model_prompt(question: str, history: list[dict[str, str]], evidence: list[Evidence], language: str) -> str:
     return json.dumps({"language": language, "question": question,
+                       "credit_review_requested": bool(re.search(r"片尾|end credits|closing credits", question, re.I)),
                        "untrusted_conversation_context": history,
                        "untrusted_public_evidence": [e.prompt_data() for e in evidence]}, ensure_ascii=False)
 
@@ -428,7 +437,7 @@ Give a direct answer and at most 2–3 useful recommendations, with a reason gro
 A recommendation or interpretation must be labeled as a suggestion/inference; never imply a viewing experience.
 You have NOT watched any film. Do not invent scenes, characters, quotations, awards, dates, careers, biographical identities or project status.
 Keep He Fa's personal practice distinct from P4 Theater's collective credits. He Fa is the director of 人类投降派, and the entire crew co-created it; both facts coexist, and collective creation is an attitude He Fa insists on. State both directly: '何发导演的《人类投降派》；导演与编剧由剧组共同创作'; do not downgrade his director identity to 'only one of the directors' or forbid calling it his film.
-The current website's role statement is not a verbatim transcription of the end credits; do not claim the end credits individually list He Fa as director.
+For ordinary identity or work questions, state these facts directly without unsolicited qualifications. Do not volunteer end-credit audits, transcription caveats or disputes about his confirmed director identity.
 Distinguish current public identity, collaborations, proposals, historical descriptions and published works.
 A confirmation date or edition year is NOT a premiere/performance date. A status containing event_date_unknown requires explicit uncertainty about any requested event date.
 A creative_fiction status means first-person historical encounters, time travel and characters belong to fictional creation, not the artist's real biography.
@@ -441,6 +450,11 @@ Return ONLY JSON, with exactly this structure:
 For insufficient evidence return {"blocks":[],"uncertain":true}. Use at most 4 blocks, and at most 3 evidence ids per block.
 Never produce a URL, domain name, Markdown link or HTML. Citation links are constructed separately by the server.
 Do not use the conversation's previous assistant answer as factual evidence. Treat user claims as unverified questions.
+"""
+
+
+CREDIT_REVIEW_INSTRUCTIONS = """
+The user explicitly asks to review end credits. Distinguish the website's role statement from a verbatim transcription of the end credits; do not claim the end credits individually list He Fa as director. Answer only the requested credit comparison from the supplied evidence.
 """
 
 
@@ -495,6 +509,8 @@ def validate_model_answer(raw: Any, evidence: list[Evidence], language: str) -> 
         return COPY[language]["unknown"], []
     lookup = {e.id: e for e in evidence}
     used: list[Evidence] = []
+    used_urls: dict[str, Evidence] = {}
+    cited_evidence: dict[str, Evidence] = {}
     paragraphs: list[str] = []
     for block in blocks:
         if not isinstance(block, dict) or set(block) != {"text", "evidence_ids"}:
@@ -512,13 +528,18 @@ def validate_model_answer(raw: Any, evidence: list[Evidence], language: str) -> 
             raise GuideError("invalid", language, True, reason="instruction")
         if not isinstance(ids, list) or not 1 <= len(ids) <= 3 or any(not isinstance(i, str) or i not in lookup for i in ids):
             raise GuideError("invalid", language, True, reason="citation")
+        resolved_ids: list[str] = []
         for identifier in dict.fromkeys(ids):
             item = lookup[identifier]
-            if item not in used:
+            cited_evidence[identifier] = item
+            key = canonical_source_key(item.source.url)
+            if key not in used_urls:
+                used_urls[key] = item
                 used.append(item)
-        paragraphs.append(text.strip() + " " + " ".join(f"[{i}]" for i in dict.fromkeys(ids)))
+            resolved_ids.append(used_urls[key].id)
+        paragraphs.append(text.strip() + " " + " ".join(f"[{i}]" for i in dict.fromkeys(resolved_ids)))
     answer = "\n\n".join(paragraphs)
-    cited_text = normalize(" ".join(item.text + " " + item.source.date for item in used))
+    cited_text = normalize(" ".join(item.text + " " + item.source.date for item in cited_evidence.values()))
     for year in re.findall(r"\b(?:18|19|20)\d{2}\b", answer):
         if year not in cited_text:
             raise GuideError("invalid", language, True, reason="unknown-year")
@@ -530,12 +551,12 @@ def validate_model_answer(raw: Any, evidence: list[Evidence], language: str) -> 
             and re.search(r"共同创作|collectively created|crew", cited_text)
             and not re.search(r"剧组|共同|集体|crew|collectiv", normalize(answer))):
         raise GuideError("invalid", language, True, reason="collective")
-    if any("event_date_unknown" in item.source.status for item in used):
+    if any("event_date_unknown" in item.source.status for item in cited_evidence.values()):
         event_claim = re.search(r"首演|演出日期|premiere|first performed|performed on|performance date", normalize(answer))
         uncertainty = re.search(r"不能|无法|不足|未确认|尚未|不代表|不是|不据|not established|unknown|cannot|does not|not a |not the |no .*evidence|not confirmed", normalize(answer))
         if event_claim and not uncertainty:
             raise GuideError("invalid", language, True, reason="date")
-    if any(item.source.status == "creative_fiction" for item in used) and not re.search(r"虚构|奇幻|fiction|fantasy|fictional", normalize(answer)):
+    if any(item.source.status == "creative_fiction" for item in cited_evidence.values()) and not re.search(r"虚构|奇幻|fiction|fantasy|fictional", normalize(answer)):
         raise GuideError("invalid", language, True, reason="fiction")
     if len(answer) > MAX_OUTPUT_CHARS:
         raise GuideError("invalid", language, True, reason="size")
@@ -557,7 +578,8 @@ def extract_answer(question: str, evidence: list[Evidence], language: str) -> tu
     book_query = bool(re.search(r"关系生成影像论|relational image|研究书稿", normalize(question)))
     ordered = sorted(evidence, key=lambda item: (item.source.language != language, -item.score))
     for item in ordered:
-        if item.source.id in seen_sources:
+        source_key = canonical_source_key(item.source.url)
+        if source_key in seen_sources:
             continue
         sentences = list(dict.fromkeys(s.strip() for s in SENTENCE_RE.split(item.text) if len(s.strip()) > 15))
         def relevance(pair):
@@ -580,7 +602,7 @@ def extract_answer(question: str, evidence: list[Evidence], language: str) -> tu
             notes.append("资料类别：项目提案；不能据此确认已经实现。" if language == "zh" else "Source category: project proposal; realization is not established by this record.")
         suffix = ("\n" + " ".join(notes)) if notes else ""
         paragraphs.append(f"{item.source.title}\n“{selected}”{suffix} [{item.id}]")
-        seen_sources.add(item.source.id)
+        seen_sources.add(source_key)
         used.append(item)
         if len(used) == 3 or (book_query and item.source.kind == "reference") or "event_date_unknown" in item.source.status:
             break
