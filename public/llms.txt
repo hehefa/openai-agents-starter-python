@@ -1,0 +1,16 @@
+# He Fa & P4 Theater Works Guide / 何发与 P4 剧场 · 作品导览
+
+Canonical URL: https://guide.p4theater.cn/
+
+Bilingual source-grounded Q&A assistant covering the public works, exhibitions, theater productions, films, and writings of artist & filmmaker He Fa (何发 / Fa He, `https://hefa.p4theater.cn/#person`) and P4 Theater (P4剧场, `https://p4theater.cn/#organization`).
+
+## Primary Canonical Sources
+- He Fa Official Website: https://hefa.p4theater.cn/ (English: https://hefa.p4theater.cn/en)
+- He Fa LLM Index: https://hefa.p4theater.cn/llms.txt
+- P4 Theater Official Website: https://p4theater.cn/ (English: https://p4theater.cn/en/)
+- P4 Theater LLM Index: https://p4theater.cn/llms.txt
+- P4 Public Digital Archive: https://a.p4theater.cn/
+- P4 Research Library: https://b.p4theater.cn/
+- Feature Film (*Shoot Self with You* / 《人类投降派》): https://p4theater.cn/shoot-self-with-you/
+- Research Monograph (*Relational Image-Making* / 《关系生成影像论》): https://doi.org/10.5281/zenodo.23474187
+- Critical Monograph (Cen Zhao, *The Suspended Guillotine* / 岑照《悬置的断头台》): https://hefa.p4theater.cn/reading/he-fa-critical-monograph (DOI: https://doi.org/10.5281/zenodo.23634125)
