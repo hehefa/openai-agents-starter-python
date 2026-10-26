@@ -1,4 +1,11 @@
-# 作品导览 / Works guide
+# 何发与P4作品导览助手 / Works Guide
+
+按作品、项目或问题提问，回答附官方资料出处与原文链接。资料沿既有定时流程同步已发布网页。
+
+**[何发作品导览](https://guide.p4theater.cn/?site=hefa&lang=zh) · [P4作品导览](https://guide.p4theater.cn/?site=p4&lang=zh) · [P4经典版导览](https://guide.p4theater.cn/?site=p4&collection=classic&lang=zh) · [English](https://guide.p4theater.cn/?site=p4&lang=en)**
+
+[P4作品与档案总导航](https://github.com/hehefa/p4-theater) · [项目、来源与公开字幕](https://github.com/hehefa/-p4-theater-archive)
+
 
 A bilingual public-works guide for He Fa and P4 Theater, based on the existing EdgeOne Makers OpenAI Agents Python starter. It uses reviewed snapshots of the two official sites and links each factual answer to its source. The model is never given control of link destinations.
 
@@ -32,7 +39,7 @@ Import a replacement **reviewed** corpus and refresh the status manifest:
 
 ### Automatic public-source sync
 
-`.github/workflows/sync-public-knowledge.yml` runs at minute 17 of each hour and supports manual `workflow_dispatch`. It uses the repository's own `GITHUB_TOKEN` with `contents: write`; no PAT, cross-repository access, model request, paid supplier or installed crawler dependency is needed. GitHub may delay scheduled runs. Private-repository runs consume the account's existing Actions allowance; the workflow has a three-minute limit and does not enable paid billing.
+`.github/workflows/sync-public-knowledge.yml` runs at minute 17 of each hour and supports manual `workflow_dispatch`. It uses the repository's own `GITHUB_TOKEN` with `contents: write`; no PAT, cross-repository access, model request, paid supplier or installed crawler dependency is needed. GitHub may delay scheduled runs. The workflow has a three-minute limit and does not enable paid billing. Usage remains subject to the account's current GitHub Actions terms.
 
 The sync reads the three public `sitemap.xml` files and He Fa's public `data/works.json`, then verifies HTML, one matching canonical, indexing eligibility and a substantial `main`/`article` body. Discovery accepts their homepages, He Fa work/catalogue/reading/reference/profile routes, the fiction-project index and its twelve bilingual encounters, plus current and classic P4 knowledge/profile/project routes or individual dated articles. The separate historical-role archive is excluded; the fiction index and encounters retain their fiction labels. Newly added home/work-directory records have low retrieval priority. Archive/year indexes, arbitrary assets, queries, off-site URLs and redirects outside the three approved hosts are excluded. Chinese URL paths are encoded for transport and canonical comparison. Existing reviewed records remain eligible even if absent from a sitemap.
 
@@ -69,3 +76,7 @@ npm run build
 ```
 
 Tests make no provider calls. They include retrieval, attribution, unknown/private/fiction boundaries, input/context limits, citation/URL checks, cancellation, timeout, gateway failures, a real SDK stream against a loopback fake gateway and a reasoning-only length-finish reproduction. That reproduction demonstrates a possible SDK error path; the production exception type alone does not establish its exact cause. Deployment, public iframe embedding and real quota-limited model evaluation must be verified separately.
+
+## Code and source-material rights
+
+Code follows the existing [MIT LICENSE](LICENSE), including retained upstream notices. The works corpus keeps its original authors, attribution and source links; the code licence does not change the rights in those texts or artworks.
