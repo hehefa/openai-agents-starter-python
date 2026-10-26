@@ -65,6 +65,23 @@ class KnowledgeTests(unittest.TestCase):
         kb = fixture_kb(fixture_source("a", url="https://evil.com/"), fixture_source("b", visibility="private"), fixture_source("c"))
         self.assertEqual([s.id for s in kb.sources], ["c"])
 
+    def test_classic_collection_prefers_verified_archive_without_rewriting_urls(self):
+        main = fixture_source("current", site="p4", url="https://p4theater.cn/yourtube/")
+        classic = fixture_source("classic", site="p4", url="https://p.p4theater.cn/yourtube/")
+        artist = fixture_source("artist")
+        kb = fixture_kb(main, classic, artist)
+        current = kb.retrieve("YourTube", [], "p4", "en")
+        archived = kb.retrieve("YourTube", [], "p4", "en", collection="classic")
+        self.assertEqual(current[0].source.url, main["url"])
+        self.assertNotIn(classic["url"], [item.source.url for item in current])
+        self.assertEqual(archived[0].source.url, classic["url"])
+        self.assertNotIn(main["url"], [item.source.url for item in archived])
+        self.assertEqual(fixture_kb(artist).retrieve("YourTube", [], "p4", "en", collection="classic")[0].source.url, artist["url"])
+        self.assertEqual(kb.retrieve("YourTube", [], "hefa", "en", collection="classic"), kb.retrieve("YourTube", [], "hefa", "en"))
+        self.assertEqual(kb.retrieve("YourTube", [], "p4", "en", collection="unknown"), current)
+        for url in ["https://p.p4theater.cn.evil.com/", "https://p.p4theater.cn:8443/", "https://user@p.p4theater.cn/"]:
+            self.assertFalse(g.safe_source_url(url))
+
     def test_text_checksum(self):
         source = fixture_source(text_sha256="not-the-text-sha")
         with self.assertRaisesRegex(ValueError, "checksum"):
@@ -265,6 +282,13 @@ class KnowledgeTests(unittest.TestCase):
 
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_classic_context_reaches_extraction_with_real_archive_sources(self):
+        item = fixture_source("classic", site="p4", url="https://p.p4theater.cn/yourtube/")
+        with patch.object(chat, "get_knowledge", return_value=fixture_kb(item)):
+            events = decode([frame async for frame in chat.handler(context(site="p4", collection="classic", mode="extract"))])
+        sources = next(data["sources"] for event, data in events if event == "sources")
+        self.assertEqual(sources[0]["url"], item["url"])
+
     async def collect(self, ctx):
         return decode([frame async for frame in chat.handler(ctx)])
 

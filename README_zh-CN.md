@@ -5,6 +5,7 @@
 完整接口、边界、运行与验证方法见 [README.md](./README.md)。
 
 - 独立页面支持 `?lang=zh|en&site=hefa|p4`；嵌入使用 `?embed=1&site=hefa&lang=zh`。
+- P4经典版使用 `?embed=1&site=p4&collection=classic&lang=zh`，会话与现主站分开；接口可选 `collection=classic` 只影响P4检索，优先已经真实抓取的 `p.p4theater.cn` 原文，不凭空改写来源链接。原调用方式保持兼容，不将经典版资料混进现主站或个人站的默认回答。
 - `mode=extract` 是显式原文摘录验证模式，不调用模型，也不作为网关错误时的静默替代。
 - `/guide-status` 只读查询部署状态，不调用模型、不返回密钥。
 - 保留原 OpenAI 兼容网关与 `@makers/deepseek-v4-flash` 默认模型。未配置、限额或上游异常会明确返回可重试状态。
@@ -17,7 +18,9 @@
 
 ## 公开资料自动同步
 
-GitHub Actions 每小时第 17 分钟检查两站公开 sitemap、作品元数据与 canonical 正文，也可手动触发；发布站点后可通过 `priority_urls` 指定本次变更的公开 URL 优先检查。只使用本仓库的 `GITHUB_TOKEN / contents: write`，不需要新 PAT、跨仓库权限、模型调用或付费抓取接口。私有仓库运行会消耗现有 Actions 额度，任务上限 3 分钟，不自动启用付费。
+GitHub Actions 每小时第 17 分钟检查何发、P4现主站与P4经典版三站公开 sitemap、作品元数据与 canonical 正文，也可手动触发；发布站点后可通过 `priority_urls` 指定本次变更的公开 URL 优先检查。只使用本仓库的 `GITHUB_TOKEN / contents: write`，不需要新 PAT、跨仓库权限、模型调用或付费抓取接口。私有仓库运行会消耗现有 Actions 额度，任务上限 3 分钟，不自动启用付费。
+
+总发现上限为5000个公开URL；单次256页、32个新页面、135秒与4MiB响应上限保持不变。必须等经典版域名、证书及自canonical地图可正常访问后再部署这份三站同步配置；任何种子失败仍保留上一份有效语料。
 
 每次最多检查 256 页、新增 32 页；较大的资料库分批轮询，不能承诺网站一改即刻同步。ETag/Last-Modified 缓存及抓取检查时间不进入 Git；导航、浮动入口、脚本、表单与纯空白变化不会触发语料提交。原有别名、署名、虚构/日期未知/提案状态与来源备注保持人工审定口径，新历史文章不会被当成当前个人身份。
 

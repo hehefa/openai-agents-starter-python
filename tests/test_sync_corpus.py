@@ -130,7 +130,38 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(len(candidate["sources"]), 3)
         self.assertEqual(candidate["sources"][0], source())
         self.assertTrue(all(sync.safe_url(s["url"]) for s in candidate["sources"]))
-        self.assertEqual(len(calls), 6)  # 3 discovery resources and 3 HTML pages.
+        self.assertEqual(len(calls), len(sync.SEEDS) + 1 + 3)  # Sitemaps, work metadata, and bounded HTML pages.
+
+    def test_classic_discovery_keeps_its_verified_host_and_historical_status(self):
+        url = "https://p.p4theater.cn/articles/2026/classic-record/"
+        get, _ = network({URL: html(), url: html(url)}, [url])
+        candidate, _, summary = sync.synchronize(payload(), {}, get=get)
+        item = next(item for item in candidate["sources"] if item["url"] == url)
+        self.assertEqual(summary["added"], 1)
+        self.assertEqual(item["site"], "p4")
+        self.assertEqual(item["status"], "historical_document")
+        wrong = html(url)
+        wrong["body"] = wrong["body"].replace(url.encode(), b"https://p4theater.cn/articles/2026/classic-record/")
+        with self.assertRaisesRegex(sync.SyncError, "canonical_mismatch"):
+            sync.extract(wrong, url, None, {})
+
+    def test_classic_failed_reviewed_source_keeps_previous_corpus(self):
+        url = "https://p.p4theater.cn/articles/2026/classic-record/"
+        old = payload()
+        old["sources"][0].update(url=url, id="classic-reviewed", site="p4")
+        before = json.dumps(old, sort_keys=True)
+        get, _ = network({URL: html(), url: html(url, body="unusable")}, [url])
+        with self.assertRaisesRegex(sync.SyncError, "reviewed_source_refresh_failed"):
+            sync.synchronize(old, {}, get=get)
+        self.assertEqual(json.dumps(old, sort_keys=True), before)
+
+    def test_three_site_discovery_exceeds_old_cap_but_remains_bounded(self):
+        urls = [f"https://p.p4theater.cn/articles/2026/record-{i}/" for i in range(2700)]
+        get, _ = network(additional=urls)
+        discovered, _ = sync.discover(get)
+        self.assertEqual(len(discovered), 2701)
+        with patch.object(sync, "MAX_DISCOVERED", 100), self.assertRaisesRegex(sync.SyncError, "discovery_limit_exceeded"):
+            sync.discover(get)
 
     def test_unchanged_run_uses_conditional_seed_and_page_cache_without_churn(self):
         get, calls = network()

@@ -4,11 +4,13 @@ import ReactMarkdown from 'react-markdown';
 import { sendMessageStream, stopAgent } from './api';
 import type { GuideMessage, GuideSession, Language, StreamError, WorkSource } from './types';
 import styles from './App.module.css';
+import { guideCollection, guideParentOrigin, guideStorageKey, readableSourceUrl } from './guideContext';
 
 const MAX_INPUT = 1600;
-const STORAGE_KEY = 'works-guide-session-v1';
 const params = new URLSearchParams(window.location.search);
 const site = params.get('site') === 'p4' ? 'p4' : 'hefa';
+const collection = guideCollection(window.location.search);
+const STORAGE_KEY = guideStorageKey(collection);
 const embedded = params.get('embed') === '1';
 const mode = params.get('mode') === 'extract' ? 'extract' : 'model';
 
@@ -55,14 +57,6 @@ function readSession(): GuideSession {
     }));
     return { ...saved, messages };
   } catch { return newSession(); }
-}
-
-function readableSourceUrl(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === 'https:' && ['hefa.p4theater.cn', 'p4theater.cn'].includes(parsed.hostname) && !parsed.username && !parsed.password) return parsed.href;
-  } catch { /* Invalid source URLs remain plain text. */ }
-  return undefined;
 }
 
 function sourceLabel(source: WorkSource, language: Language): string {
@@ -151,13 +145,7 @@ export default function App() {
 
   useEffect(() => {
     if (!embedded || window.parent === window) return;
-    let parentOrigin = '';
-    try {
-      const referrer = new URL(document.referrer);
-      const official = ['https://hefa.p4theater.cn', 'https://p4theater.cn'].includes(referrer.origin);
-      const local = ['localhost', '127.0.0.1'].includes(window.location.hostname) && ['localhost', '127.0.0.1'].includes(referrer.hostname);
-      if (official || local) parentOrigin = referrer.origin;
-    } catch { return; }
+    const parentOrigin = guideParentOrigin(document.referrer, window.location.hostname);
     if (!parentOrigin) return;
     const escape = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') window.parent.postMessage({ type: 'works-guide-close' }, parentOrigin);
@@ -189,7 +177,7 @@ export default function App() {
     updateSession(current => ({ ...current, messages: [...previous, user, response].slice(-6) }));
     setInput(''); setLoading(true);
     const active = sessionRef.current;
-    controllerRef.current = sendMessageStream({ message: trimmed, conversationId: active.conversationId, userId: active.userId, language, site, history, mode }, {
+    controllerRef.current = sendMessageStream({ message: trimmed, conversationId: active.conversationId, userId: active.userId, language, site, collection, history, mode }, {
       onTextDelta(delta) { updateResponse(response.id, message => ({ ...message, content: message.content + delta })); },
       onSources(sources) { updateResponse(response.id, message => ({ ...message, sources })); },
       onAnswerMeta(answerMode) { updateResponse(response.id, message => ({ ...message, mode: answerMode })); },

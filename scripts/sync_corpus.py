@@ -26,11 +26,11 @@ from xml.etree import ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "agents/_knowledge/corpus.json"
 MANIFEST = ROOT / "cloud-functions/guide-status/knowledge-status.json"
-HOSTS = {"hefa.p4theater.cn", "p4theater.cn"}
+HOSTS = {"hefa.p4theater.cn", "p4theater.cn", "p.p4theater.cn"}
 SEEDS = [f"https://{host}/sitemap.xml" for host in sorted(HOSTS)]
 WORKS = "https://hefa.p4theater.cn/data/works.json"
 MAX_BYTES = 4 * 1024 * 1024
-MAX_DISCOVERED = 2500
+MAX_DISCOVERED = 5000
 MAX_PAGES = 256
 MAX_NEW = 32
 TIME_BUDGET = 135

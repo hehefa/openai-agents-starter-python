@@ -24,7 +24,7 @@ MAX_HISTORY_CHARS = 3600
 MAX_CONTEXT_CHARS = 11500
 MAX_OUTPUT_CHARS = 5200
 MAX_EVIDENCE = 6
-ALLOWED_HOSTS = frozenset({"hefa.p4theater.cn", "p4theater.cn"})
+ALLOWED_HOSTS = frozenset({"hefa.p4theater.cn", "p4theater.cn", "p.p4theater.cn"})
 CORPUS_PATH = Path(__file__).parent / "_knowledge" / "corpus.json"
 
 # The aliases are search expansions, not factual statements or generated answers.
@@ -269,7 +269,7 @@ class KnowledgeBase:
             chunks.append(current)
         return chunks
 
-    def retrieve(self, question: str, history: list[dict[str, str]], site: str, language: str) -> list[Evidence]:
+    def retrieve(self, question: str, history: list[dict[str, str]], site: str, language: str, collection: str | None = None) -> list[Evidence]:
         if not self.chunks:
             return []
         # An unknown named work/person must not inherit generic matches such as
@@ -301,6 +301,8 @@ class KnowledgeBase:
         candidates: list[tuple[float, Source, str]] = []
         count = len(self.chunks)
         for source, chunk, terms in self.chunks:
+            if urlsplit(source.url).hostname == "p.p4theater.cn" and not (site == "p4" and collection == "classic"):
+                continue
             title_terms = set(tokenize(source.title + " " + " ".join(source.aliases)))
             if subjects:
                 local = re.sub(r"\s+", "", normalize(chunk + " " + source.title + " " + " ".join(source.aliases)))
@@ -354,7 +356,17 @@ class KnowledgeBase:
             score *= .9 + source.priority * .05
             if score > 0.18:
                 candidates.append((score, source, chunk))
-        candidates.sort(key=lambda c: c[0], reverse=True)
+        if site == "p4" and collection == "classic":
+            # Prefer actual, verified archive records. Never turn a main-site
+            # citation into an archive URL without having fetched that page.
+            classic_paths = {urlsplit(canonical_source_key(source.url)).path for _, source, _ in candidates
+                             if urlsplit(source.url).hostname == "p.p4theater.cn"}
+            candidates = [item for item in candidates if not (
+                urlsplit(item[1].url).hostname == "p4theater.cn"
+                and urlsplit(canonical_source_key(item[1].url)).path in classic_paths)]
+            candidates.sort(key=lambda c: (urlsplit(c[1].url).hostname == "p.p4theater.cn", c[0]), reverse=True)
+        else:
+            candidates.sort(key=lambda c: c[0], reverse=True)
         evidence: list[Evidence] = []
         source_urls: set[str] = set()
         remaining = MAX_CONTEXT_CHARS

@@ -19,7 +19,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'self' https://hefa.p4theater.cn https://p4theater.cn"
+          "value": "frame-ancestors 'self' https://hefa.p4theater.cn https://p4theater.cn https://p.p4theater.cn"
         }
       ]
     },

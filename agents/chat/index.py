@@ -158,7 +158,8 @@ async def handler(context: Any) -> AsyncGenerator[str, None]:
             answer, used = COPY[language]["unseen"], []
         else:
             knowledge = get_knowledge()
-            evidence = knowledge.retrieve(message, history, site, language)
+            collection = context.request.body.get("collection") if site == "p4" else None
+            evidence = knowledge.retrieve(message, history, site, language, collection=collection)
             if not evidence:
                 answer, used = COPY[language]["unknown"], []
             elif mode == "extract":
