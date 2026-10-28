@@ -27,6 +27,25 @@ ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "agents/_knowledge/corpus.json"
 MANIFEST = ROOT / "cloud-functions/guide-status/knowledge-status.json"
 HOSTS = {"hefa.p4theater.cn", "p4theater.cn", "p.p4theater.cn"}
+# Fixed, source-checked P4 project routes. Do not infer arbitrary projects or
+# person identities from a slug, a credit, or the participants directory.
+P4_PROJECT_SLUGS = frozenset({
+    "shadow-counterpoint", "real-image", "displace", "cocoon",
+    "howlers-on-the-rooftop", "kill-the-rose", "purple-action", "iceberg",
+    "vortex", "spiral-staircase", "porphyria", "kiss-you-kill-me",
+    "romance-theatre", "chengfeng-polang", "four-eyes", "last-rehearsal",
+    "human-surrender", "middle-ground", "meat-grinder", "global-private-screenings",
+    "communal-script", "pixel-echo-xiii", "hamlet-mirror", "alice-lake-common-festival",
+    "p4u", "happiness-kingdom", "deadly-joke", "broken-moon", "body",
+    "glass-menagerie", "world-question-center-hangzhou", "flowers-as-animals",
+})
+P4_PROJECT_URLS = frozenset(
+    f"https://p4theater.cn/{language}projects/{slug}/"
+    for slug in P4_PROJECT_SLUGS for language in ("", "en/")
+)
+P4_PARTICIPANT_URLS = frozenset({
+    "https://p4theater.cn/participants/", "https://p4theater.cn/en/participants/",
+})
 SEEDS = [f"https://{host}/sitemap.xml" for host in sorted(HOSTS)]
 WORKS = "https://hefa.p4theater.cn/data/works.json"
 MAX_BYTES = 4 * 1024 * 1024
@@ -61,6 +80,10 @@ def safe_url(value: str) -> bool:
 def eligible(url: str) -> bool:
     if not safe_url(url):
         return False
+    # Exact URLs retain canonical trailing slashes and restrict these new
+    # routes to the organisation host; all legacy eligibility is unchanged.
+    if url in P4_PROJECT_URLS or url in P4_PARTICIPANT_URLS:
+        return True
     p = urlsplit(url)
     path = re.sub(r"^/en(?=/|$)", "", p.path).strip("/")
     if p.hostname == "hefa.p4theater.cn":
@@ -181,6 +204,9 @@ def extract(response: dict, requested: str, old: dict | None, work_meta: dict) -
     if not safe_url(canonical) or normalized_url(canonical).rstrip("/") != normalized_url(response["url"]).rstrip("/") or urlsplit(canonical).hostname != urlsplit(requested).hostname:
         raise SyncError("canonical_mismatch")
     canonical = normalized_url(canonical)
+    if requested in P4_PROJECT_URLS or requested in P4_PARTICIPANT_URLS:
+        if canonical != requested or normalized_url(response["url"]) != requested:
+            raise SyncError("canonical_mismatch")
     if old and canonical.rstrip("/") != normalized_url(old["url"]).rstrip("/"):
         raise SyncError("reviewed_canonical_changed")
     if any(n.tag == "meta" and n.attrs.get("name", "").lower() in {"robots", "googlebot", "bingbot"} and "noindex" in n.attrs.get("content", "").lower() for n in nodes):
@@ -233,6 +259,12 @@ def extract(response: dict, requested: str, old: dict | None, work_meta: dict) -
                 "author_scope": meta.get("role") or "Official public source. Preserve named authors and collective credits; historical records do not establish current identity or realization of proposals."}
         if kind == "fiction":
             item["author_scope"] = "Fictional AI-assisted creative theatre; historical encounters are invented, not real biography."
+        if canonical in P4_PROJECT_URLS:
+            item.update(kind="project_record", status="documented_project_archive",
+                        author_scope="P4 organisation-side project archive. Preserve each source's named initiators, participants, collective credits and relationship to P4; an archive record does not make every project a sole P4 or He Fa creation.")
+        elif canonical in P4_PARTICIPANT_URLS:
+            item.update(kind="directory", status="public_directory", priority=2,
+                        author_scope="P4 organisation-side index of source-specific project credits, grouped by literal credited name. A repeated name is not a verified unified identity; no individual artist CV is implied.")
         for field in ("date", "date_precision", "section", "role", "medium", "source_note"):
             if meta.get(field):
                 item[field] = meta[field]

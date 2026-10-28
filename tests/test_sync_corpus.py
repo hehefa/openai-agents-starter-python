@@ -1,5 +1,6 @@
 """Public-corpus sync regressions: in-memory HTTP only, no model/dependency."""
 from copy import deepcopy
+from html import escape
 import importlib.util
 import io
 import json
@@ -18,6 +19,11 @@ spec.loader.exec_module(sync)
 
 URL = "https://hefa.p4theater.cn/work/known"
 TEXT = "A documented public installation preserves the artist statement and the named collaborators. It does not establish private facts or unseen film details."
+RELEASE_READING_URLS = (
+    "https://p4theater.cn/en/knowledge/shadow-counterpoint-reading/",
+    "https://p4theater.cn/en/knowledge/rehearsal-to-film/",
+    "https://p4theater.cn/en/knowledge/p4-spaces-and-distance/",
+)
 
 
 def html(url=URL, body=TEXT, extra="", head="", title="Known work"):
@@ -57,6 +63,106 @@ def network(pages=None, additional=(), work_rows=()):
 
 
 class SyncTests(unittest.TestCase):
+    def test_verified_project_release_has_69_eligible_canonical_urls(self):
+        self.assertEqual(len(sync.P4_PROJECT_SLUGS), 32)
+        self.assertEqual(len(sync.P4_PROJECT_URLS), 64)
+        urls = sorted(sync.P4_PROJECT_URLS | sync.P4_PARTICIPANT_URLS) + list(RELEASE_READING_URLS)
+        self.assertEqual(len(set(urls)), 69)
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertTrue(sync.eligible(url))
+                self.assertEqual(sync.normalized_url(url), url)
+
+    def test_new_routes_reject_unverified_hosts_slugs_and_url_variants(self):
+        for canonical in sorted(sync.P4_PROJECT_URLS | sync.P4_PARTICIPANT_URLS):
+            variants = [canonical.replace("https://", "http://"),
+                        canonical.replace("p4theater.cn", "unknown.p4theater.cn"),
+                        canonical.replace("p4theater.cn", "hefa.p4theater.cn"),
+                        canonical.replace("p4theater.cn", "p.p4theater.cn"),
+                        canonical.replace("p4theater.cn", "P4THEATER.CN"),
+                        canonical.replace("p4theater.cn", "p4theater.cn:443"),
+                        canonical + "?page=1", canonical + "#credits", canonical.rstrip("/"),
+                        canonical.replace(".cn/", ".cn//"), canonical + "../",
+                        canonical.replace("projects/", "projects/../projects/") if "/projects/" in canonical else canonical + "extra/"]
+            for url in variants:
+                with self.subTest(url=url):
+                    self.assertFalse(sync.eligible(url))
+        for url in ["https://p4theater.cn/projects/unknown-project/",
+                    "https://p4theater.cn/en/projects/unknown-project/",
+                    "https://p4theater.cn/projects/%73hadow-counterpoint/",
+                    "https://p4theater.cn/projects/Shadow-counterpoint/",
+                    "https://p4theater.cn/projects/", "https://p4theater.cn/en/projects/",
+                    "https://p4theater.cn/participants/someone/"]:
+            self.assertFalse(sync.eligible(url), url)
+
+    def test_new_archives_preserve_organisation_and_literal_credit_scope(self):
+        for url in sorted(sync.P4_PROJECT_URLS | sync.P4_PARTICIPANT_URLS):
+            with self.subTest(url=url):
+                item = sync.extract(html(url), url, None, {})
+                self.assertEqual(item["site"], "p4")
+                self.assertNotIn("person", item)
+                self.assertNotIn("people", item)
+                self.assertNotIn("creators", item)
+                if url in sync.P4_PROJECT_URLS:
+                    self.assertEqual(item["kind"], "project_record")
+                    self.assertEqual(item["status"], "documented_project_archive")
+                    self.assertIn("not make every project a sole P4 or He Fa creation", item["author_scope"])
+                else:
+                    self.assertEqual(item["kind"], "directory")
+                    self.assertEqual(item["status"], "public_directory")
+                    self.assertEqual(item["priority"], 2)
+                    self.assertIn("literal credited name", item["author_scope"])
+                    self.assertIn("not a verified unified identity", item["author_scope"])
+                old = source(); old.update(url=url, site="p4", kind="reviewed_archive", author_scope="Reviewed source-specific collective credits.")
+                refreshed = sync.extract(html(url, body=TEXT + " A public source-specific addition."), url, old, {})
+                for key in ("id", "kind", "status", "priority", "aliases", "author_scope", "source_note", "section"):
+                    self.assertEqual(refreshed[key], old[key])
+
+    def test_new_routes_keep_canonical_noindex_and_content_guards(self):
+        for url in ("https://p4theater.cn/projects/shadow-counterpoint/", "https://p4theater.cn/en/participants/"):
+            no_slash = html(url.rstrip("/")); no_slash["url"] = url
+            response_redirect = html(url); response_redirect["url"] = url.rstrip("/")
+            cases = [no_slash, response_redirect, html(url, body="short"),
+                     html(url, head='<meta name="robots" content="noindex">')]
+            for response in cases:
+                with self.subTest(url=url, body=response["body"][:100]), self.assertRaises(sync.SyncError):
+                    sync.extract(response, url, None, {})
+            old = source(); old.update(url=url, text=TEXT * 10)
+            with self.assertRaisesRegex(sync.SyncError, "empty_or_abnormal_main_content"):
+                sync.extract(html(url), url, old, {})
+
+    def test_all_committed_source_metadata_survives_body_refresh(self):
+        # The committed corpus grows in normal runs; exercise every current
+        # reviewed row rather than pinning an obsolete source count.
+        committed = json.loads(sync.CORPUS.read_text())
+        before = deepcopy(committed)
+        content_fields = {"title", "text", "language", "text_sha256", "sha256", "fetched_at", "raw_path"}
+        for old in committed["sources"]:
+            with self.subTest(source_id=old["id"]):
+                self.assertTrue(sync.safe_url(old["url"]))
+                response = html(old["url"], body=escape(old["text"]) + " A source-specific public addition.", title=escape(old["title"]))
+                refreshed = sync.extract(response, old["url"], old, {})
+                for field in old.keys() - content_fields:
+                    self.assertEqual(refreshed[field], old[field], field)
+        self.assertEqual(committed, before)
+
+    def test_69_release_sources_fit_three_normal_32_32_5_runs(self):
+        # Synthetic in-memory HTTP fixtures only: this does not claim that
+        # candidate website pages are deployed or publicly fetchable.
+        urls = sorted(sync.P4_PROJECT_URLS) + sorted(sync.P4_PARTICIPANT_URLS) + list(RELEASE_READING_URLS)
+        get, calls = network({URL: html(), **{u: html(u) for u in urls}}, urls)
+        current, cache = payload(), {}
+        for batch, expected in ((urls[:32], 32), (urls[32:64], 32), (urls[64:], 5)):
+            calls.clear()
+            current, cache, summary = sync.synchronize(current, cache, get=get, priority_urls=batch)
+            self.assertEqual(summary["added"], expected)
+            self.assertLessEqual(summary["added"], sync.MAX_NEW)
+            self.assertLessEqual(summary["checked"], sync.MAX_PAGES)
+            self.assertEqual(current["sources"][0], source())
+            self.assertTrue(set(batch).issubset({s["url"] for s in current["sources"]}))
+        self.assertEqual(len(current["sources"]), 70)
+        self.assertTrue(set(urls).issubset({s["url"] for s in current["sources"]}))
+
     def test_explicit_public_path_allowlist_and_redirects(self):
         for url in [URL, "https://hefa.p4theater.cn/", "https://p4theater.cn/", "https://p4theater.cn/en/", "https://hefa.p4theater.cn/reading/new-essay", "https://hefa.p4theater.cn/en/hefa-on", "https://hefa.p4theater.cn/works", "https://hefa.p4theater.cn/en/works/all", "https://hefa.p4theater.cn/hefa-on/encounters/new-encounter", "https://p4theater.cn/articles/2026/new-article/", "https://p4theater.cn/en/knowledge/new-research/"]:
             self.assertTrue(sync.eligible(url), url)
