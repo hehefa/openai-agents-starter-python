@@ -50,7 +50,7 @@ P4_REHEARSAL_URLS = frozenset(
     f"https://p4theater.cn/{language}reading/{path}"
     for language in ("", "en/") for path in (
         "rehearsals-2022/", "rehearsals-2022/body/", "rehearsals-2022/meat-grinder/",
-        "tomorrow-does-not-exist/", "after-the-white-cloth/",
+        "tomorrow-does-not-exist/", "after-the-white-cloth/", "door-to-the-moon/",
     )
 )
 P4_HOMEPAGE_ARCHIVES = frozenset(
