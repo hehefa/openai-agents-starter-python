@@ -74,7 +74,7 @@ class SyncTests(unittest.TestCase):
                 self.assertEqual(sync.normalized_url(url), url)
 
     def test_rehearsal_readings_and_historical_homepages(self):
-        self.assertEqual(len(sync.P4_REHEARSAL_URLS), 8)
+        self.assertEqual(len(sync.P4_REHEARSAL_URLS), 10)
         self.assertEqual(len(sync.P4_HOMEPAGE_ARCHIVES), 2)
         for locale in ("", "en/"):
             study = f"https://p4theater.cn/{locale}reading/tomorrow-does-not-exist/"
@@ -82,6 +82,9 @@ class SyncTests(unittest.TestCase):
             self.assertIn(study, sync.P4_REHEARSAL_URLS)
             self.assertIn(project, sync.P4_PROJECT_URLS)
             self.assertFalse(sync.eligible(study + "watch/"))
+            endings = f"https://p4theater.cn/{locale}reading/after-the-white-cloth/"
+            self.assertIn(endings, sync.P4_REHEARSAL_URLS)
+            self.assertFalse(sync.eligible(endings + "watch/"))
         for url in sync.P4_REHEARSAL_URLS | sync.P4_HOMEPAGE_ARCHIVES:
             with self.subTest(url=url):
                 self.assertTrue(sync.eligible(url))
