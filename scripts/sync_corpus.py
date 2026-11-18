@@ -37,7 +37,7 @@ P4_PROJECT_SLUGS = frozenset({
     "human-surrender", "middle-ground", "meat-grinder", "global-private-screenings",
     "communal-script", "pixel-echo-xiii", "hamlet-mirror", "alice-lake-common-festival",
     "p4u", "happiness-kingdom", "deadly-joke", "broken-moon", "body",
-    "glass-menagerie", "world-question-center-hangzhou", "flowers-as-animals",
+    "glass-menagerie", "world-question-center-hangzhou", "flowers-as-animals", "tomorrow-does-not-exist",
 })
 P4_PROJECT_URLS = frozenset(
     f"https://p4theater.cn/{language}projects/{slug}/"
@@ -47,8 +47,11 @@ P4_PARTICIPANT_URLS = frozenset({
     "https://p4theater.cn/participants/", "https://p4theater.cn/en/participants/",
 })
 P4_REHEARSAL_URLS = frozenset(
-    f"https://p4theater.cn/{language}reading/rehearsals-2022/{suffix}"
-    for language in ("", "en/") for suffix in ("", "body/", "meat-grinder/")
+    f"https://p4theater.cn/{language}reading/{path}"
+    for language in ("", "en/") for path in (
+        "rehearsals-2022/", "rehearsals-2022/body/", "rehearsals-2022/meat-grinder/",
+        "tomorrow-does-not-exist/",
+    )
 )
 P4_HOMEPAGE_ARCHIVES = frozenset(
     f"https://p4theater.cn/{language}history/baseline-20261027/" for language in ("", "en/")

@@ -63,19 +63,25 @@ def network(pages=None, additional=(), work_rows=()):
 
 
 class SyncTests(unittest.TestCase):
-    def test_verified_project_release_has_69_eligible_canonical_urls(self):
-        self.assertEqual(len(sync.P4_PROJECT_SLUGS), 32)
-        self.assertEqual(len(sync.P4_PROJECT_URLS), 64)
+    def test_verified_project_release_has_71_eligible_canonical_urls(self):
+        self.assertEqual(len(sync.P4_PROJECT_SLUGS), 33)
+        self.assertEqual(len(sync.P4_PROJECT_URLS), 66)
         urls = sorted(sync.P4_PROJECT_URLS | sync.P4_PARTICIPANT_URLS) + list(RELEASE_READING_URLS)
-        self.assertEqual(len(set(urls)), 69)
+        self.assertEqual(len(set(urls)), 71)
         for url in urls:
             with self.subTest(url=url):
                 self.assertTrue(sync.eligible(url))
                 self.assertEqual(sync.normalized_url(url), url)
 
     def test_rehearsal_readings_and_historical_homepages(self):
-        self.assertEqual(len(sync.P4_REHEARSAL_URLS), 6)
+        self.assertEqual(len(sync.P4_REHEARSAL_URLS), 8)
         self.assertEqual(len(sync.P4_HOMEPAGE_ARCHIVES), 2)
+        for locale in ("", "en/"):
+            study = f"https://p4theater.cn/{locale}reading/tomorrow-does-not-exist/"
+            project = f"https://p4theater.cn/{locale}projects/tomorrow-does-not-exist/"
+            self.assertIn(study, sync.P4_REHEARSAL_URLS)
+            self.assertIn(project, sync.P4_PROJECT_URLS)
+            self.assertFalse(sync.eligible(study + "watch/"))
         for url in sync.P4_REHEARSAL_URLS | sync.P4_HOMEPAGE_ARCHIVES:
             with self.subTest(url=url):
                 self.assertTrue(sync.eligible(url))
@@ -161,13 +167,13 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(refreshed[field], old[field], field)
         self.assertEqual(committed, before)
 
-    def test_69_release_sources_fit_three_normal_32_32_5_runs(self):
+    def test_71_release_sources_fit_three_normal_32_32_7_runs(self):
         # Synthetic in-memory HTTP fixtures only: this does not claim that
         # candidate website pages are deployed or publicly fetchable.
         urls = sorted(sync.P4_PROJECT_URLS) + sorted(sync.P4_PARTICIPANT_URLS) + list(RELEASE_READING_URLS)
         get, calls = network({URL: html(), **{u: html(u) for u in urls}}, urls)
         current, cache = payload(), {}
-        for batch, expected in ((urls[:32], 32), (urls[32:64], 32), (urls[64:], 5)):
+        for batch, expected in ((urls[:32], 32), (urls[32:64], 32), (urls[64:], 7)):
             calls.clear()
             current, cache, summary = sync.synchronize(current, cache, get=get, priority_urls=batch)
             self.assertEqual(summary["added"], expected)
@@ -175,7 +181,7 @@ class SyncTests(unittest.TestCase):
             self.assertLessEqual(summary["checked"], sync.MAX_PAGES)
             self.assertEqual(current["sources"][0], source())
             self.assertTrue(set(batch).issubset({s["url"] for s in current["sources"]}))
-        self.assertEqual(len(current["sources"]), 70)
+        self.assertEqual(len(current["sources"]), 72)
         self.assertTrue(set(urls).issubset({s["url"] for s in current["sources"]}))
 
     def test_explicit_public_path_allowlist_and_redirects(self):
