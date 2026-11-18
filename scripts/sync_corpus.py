@@ -46,6 +46,14 @@ P4_PROJECT_URLS = frozenset(
 P4_PARTICIPANT_URLS = frozenset({
     "https://p4theater.cn/participants/", "https://p4theater.cn/en/participants/",
 })
+P4_REHEARSAL_URLS = frozenset(
+    f"https://p4theater.cn/{language}reading/rehearsals-2022/{suffix}"
+    for language in ("", "en/") for suffix in ("", "body/", "meat-grinder/")
+)
+P4_HOMEPAGE_ARCHIVES = frozenset(
+    f"https://p4theater.cn/{language}history/baseline-20261027/" for language in ("", "en/")
+)
+EXACT_P4_URLS = P4_PROJECT_URLS | P4_PARTICIPANT_URLS | P4_REHEARSAL_URLS | P4_HOMEPAGE_ARCHIVES
 SEEDS = [f"https://{host}/sitemap.xml" for host in sorted(HOSTS)]
 WORKS = "https://hefa.p4theater.cn/data/works.json"
 MAX_BYTES = 4 * 1024 * 1024
@@ -82,7 +90,7 @@ def eligible(url: str) -> bool:
         return False
     # Exact URLs retain canonical trailing slashes and restrict these new
     # routes to the organisation host; all legacy eligibility is unchanged.
-    if url in P4_PROJECT_URLS or url in P4_PARTICIPANT_URLS:
+    if url in EXACT_P4_URLS:
         return True
     p = urlsplit(url)
     path = re.sub(r"^/en(?=/|$)", "", p.path).strip("/")
@@ -204,7 +212,7 @@ def extract(response: dict, requested: str, old: dict | None, work_meta: dict) -
     if not safe_url(canonical) or normalized_url(canonical).rstrip("/") != normalized_url(response["url"]).rstrip("/") or urlsplit(canonical).hostname != urlsplit(requested).hostname:
         raise SyncError("canonical_mismatch")
     canonical = normalized_url(canonical)
-    if requested in P4_PROJECT_URLS or requested in P4_PARTICIPANT_URLS:
+    if requested in EXACT_P4_URLS:
         if canonical != requested or normalized_url(response["url"]) != requested:
             raise SyncError("canonical_mismatch")
     if old and canonical.rstrip("/") != normalized_url(old["url"]).rstrip("/"):
@@ -262,6 +270,9 @@ def extract(response: dict, requested: str, old: dict | None, work_meta: dict) -
         if canonical in P4_PROJECT_URLS:
             item.update(kind="project_record", status="documented_project_archive",
                         author_scope="P4 organisation-side project archive. Preserve each source's named initiators, participants, collective credits and relationship to P4; an archive record does not make every project a sole P4 or He Fa creation.")
+        elif canonical in P4_HOMEPAGE_ARCHIVES:
+            item.update(kind="historical_record", status="historical_document", priority=2,
+                        author_scope="P4's archived 27 October 2026 homepage. Read as a historical edition; refer to current project records for updated credits.")
         elif canonical in P4_PARTICIPANT_URLS:
             item.update(kind="directory", status="public_directory", priority=2,
                         author_scope="P4 organisation-side index of source-specific project credits, grouped by literal credited name. A repeated name is not a verified unified identity; no individual artist CV is implied.")

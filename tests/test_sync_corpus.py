@@ -73,6 +73,21 @@ class SyncTests(unittest.TestCase):
                 self.assertTrue(sync.eligible(url))
                 self.assertEqual(sync.normalized_url(url), url)
 
+    def test_rehearsal_readings_and_historical_homepages(self):
+        self.assertEqual(len(sync.P4_REHEARSAL_URLS), 6)
+        self.assertEqual(len(sync.P4_HOMEPAGE_ARCHIVES), 2)
+        for url in sync.P4_REHEARSAL_URLS | sync.P4_HOMEPAGE_ARCHIVES:
+            with self.subTest(url=url):
+                self.assertTrue(sync.eligible(url))
+                self.assertFalse(sync.eligible(url + "unreviewed/"))
+                self.assertFalse(sync.eligible(url.replace("//p4theater", "//p.p4theater")))
+                record = sync.extract(html(url), url, None, {})
+                kind = "historical_record" if url in sync.P4_HOMEPAGE_ARCHIVES else "research"
+                self.assertEqual(record["kind"], kind)
+                other_url = url.removesuffix("/") + "-other/"
+                with self.assertRaisesRegex(sync.SyncError, "canonical_mismatch"):
+                    sync.extract(html(other_url), url, None, {})
+
     def test_new_routes_reject_unverified_hosts_slugs_and_url_variants(self):
         for canonical in sorted(sync.P4_PROJECT_URLS | sync.P4_PARTICIPANT_URLS):
             variants = [canonical.replace("https://", "http://"),
